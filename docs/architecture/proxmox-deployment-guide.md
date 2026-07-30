@@ -51,13 +51,13 @@ pct create 104 local:vztmpl/ubuntu-26.04-standard_26.04-1_amd64.tar.zst \
 
 Some mounts are created via the Proxmox GUI during CT creation (storage-backed volumes from `hdd-thin`), others are directory bind-mounts from the host filesystem. The final config for each CT should look like:
 
-| CT               | mp0                                             | mp1                            |
-| ---------------- | ----------------------------------------------- | ------------------------------ |
-| 100 (silo-api)   | `/mnt/media` (media files, ro)                  | —                              |
-| 101 (silo-minio) | `/mnt/minio-data` (bucket, 60 GB from hdd-thin) | —                              |
-| 102 (silo-db)    | —                                               | —                              |
-| 103 (silo-tc-1)  | `/var/lib/silo-transcode` (120 GB from hdd-thin)    | `/mnt/media` (media files, ro) |
-| 104 (silo-tc-2)  | `/var/lib/silo-transcode` (120 GB from hdd-thin)    | `/mnt/media` (media files, ro) |
+| CT               | mp0                                              | mp1                            |
+| ---------------- | ------------------------------------------------ | ------------------------------ |
+| 100 (silo-api)   | `/mnt/media` (media files, ro)                   | —                              |
+| 101 (silo-minio) | `/mnt/minio-data` (bucket, 60 GB from hdd-thin)  | —                              |
+| 102 (silo-db)    | —                                                | —                              |
+| 103 (silo-tc-1)  | `/var/lib/silo-transcode` (120 GB from hdd-thin) | `/mnt/media` (media files, ro) |
+| 104 (silo-tc-2)  | `/var/lib/silo-transcode` (120 GB from hdd-thin) | `/mnt/media` (media files, ro) |
 
 #### Transcode temp (hdd-thin) — created via GUI during CT creation
 
@@ -464,7 +464,7 @@ Create `/opt/silo-tc/docker-compose.yml`:
 ```yaml
 services:
   silo-transcode:
-    image: ghcr.io/silo-server/silo-server:latest   # stock image
+    image: ghcr.io/silo-server/silo-server:latest # stock image
     restart: unless-stopped
     environment:
       MODE: transcode
@@ -473,13 +473,13 @@ services:
       SECRET_KEY: "<same-key-from-section-3.1>"
       DATABASE_URL: postgres://silo:silo@<silo-db-ip>:5432/silo?sslmode=disable
       REDIS_URL: redis://<silo-db-ip>:6379
-      NODE_NAME: tc-1                  # tc-2 on the other CT
+      NODE_NAME: tc-1 # tc-2 on the other CT
     ports:
-      - "8080:8080"                    # transcode API (called by the API server)
+      - "8080:8080" # transcode API (called by the API server)
     volumes:
       - /var/lib/silo-transcode:/var/lib/silo-transcode
-      - /mnt/media:/mnt/media:ro        # .strm files (same path as API server)
-      - /dev/dri:/dev/dri               # Intel iGPU for QSV
+      - /mnt/media:/mnt/media:ro # .strm files (same path as API server)
+      - /dev/dri:/dev/dri # Intel iGPU for QSV
     devices:
       - /dev/dri:/dev/dri
 ```
