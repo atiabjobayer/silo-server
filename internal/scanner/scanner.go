@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -3256,6 +3257,11 @@ func (s *Scanner) clearLegacyLinksForUnmatchableRoots(_ context.Context, _ int, 
 // gatherHints computes the OSHash for a media file.
 func (s *Scanner) gatherHints(filePath string) FileHints {
 	hints := FileHints{}
+	// .strm files are tiny text files (~200 B) containing a remote URL,
+	// not binary media. OSHash requires ≥128 KB and is meaningless here.
+	if strings.EqualFold(filepath.Ext(filePath), ".strm") {
+		return hints
+	}
 	hash, err := ComputeOSHash(filePath)
 	if err != nil {
 		slog.Warn("scanner: OSHash computation failed", "path", filePath, "error", err)
@@ -3268,6 +3274,35 @@ func (s *Scanner) gatherHints(filePath string) FileHints {
 // probeFile attempts to get probe data by running local ffprobe.
 func (s *Scanner) probeFile(ctx context.Context, filePath string) (*ProbeData, string) {
 	if strings.EqualFold(filepath.Ext(filePath), ".strm") {
+		// Try a lightweight remote ffprobe against the URL inside the
+		// .strm file so multi-track audio, subtitle languages, and
+		// codec metadata are accurate. ffprobe only reads the container
+		// headers — it never downloads the full file.
+		if s.ffprobePath != "" {
+			if streamURL, urlErr := readStrmURL(filePath); urlErr == nil {
+				probe, probeErr := ProbeRemoteURL(ctx, s.ffprobePath, streamURL)
+				if probeErr == nil && probe != nil {
+					return probe, "strm-remote"
+				}
+				if probeErr != nil {
+					slog.WarnContext(ctx, "scanner: remote ffprobe failed for .strm, using placeholder",
+						"component", "scanner",
+						"path", filePath,
+						"error", probeErr,
+					)
+				}
+			} else if urlErr != nil {
+				slog.WarnContext(ctx, "scanner: failed to read .strm URL, using placeholder",
+					"component", "scanner",
+					"path", filePath,
+					"error", urlErr,
+				)
+			}
+		}
+		// Fallback: filename-derived placeholder when remote probing is
+		// unavailable or fails. This keeps scanning fast and catalog
+		// display functional while the real metadata comes from the
+		// deferred playback-time probe.
 		lowerPath := strings.ToLower(filePath)
 		width, height, resolution := 1920, 1080, "1080p"
 		if strings.Contains(lowerPath, "2160p") || strings.Contains(lowerPath, "4k") {
@@ -3302,6 +3337,39 @@ func (s *Scanner) probeFile(ctx context.Context, filePath string) (*ProbeData, s
 	}
 
 	return nil, "local"
+}
+
+// readStrmURL reads a .strm file and returns the HTTP/HTTPS URL it contains.
+func readStrmURL(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", fmt.Errorf("read .strm file: %w", err)
+	}
+	defer file.Close()
+
+	const maxStreamShortcutBytes = 64 * 1024
+	content, err := io.ReadAll(io.LimitReader(file, maxStreamShortcutBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read .strm file: %w", err)
+	}
+	if len(content) > maxStreamShortcutBytes {
+		return "", fmt.Errorf(".strm file exceeds 64 KiB")
+	}
+
+	streamURL := strings.TrimSpace(string(content))
+	if streamURL == "" {
+		return "", fmt.Errorf(".strm file is empty")
+	}
+	if strings.ContainsAny(streamURL, "\r\n") {
+		return "", fmt.Errorf(".strm file must contain exactly one URL")
+	}
+
+	lowerURL := strings.ToLower(streamURL)
+	if !strings.HasPrefix(lowerURL, "https://") && !strings.HasPrefix(lowerURL, "http://") {
+		return "", fmt.Errorf(".strm URL must use http or https")
+	}
+
+	return streamURL, nil
 }
 
 // fetchMarkers checks S3 for intro/credits markers for the given file hash.

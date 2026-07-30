@@ -86,6 +86,19 @@ func StreamExtractSubtitle(ctx context.Context, opts StreamExtractOpts) error {
 		return errors.New("StreamExtractSubtitle: InputPath is required")
 	}
 
+	// Resolve .strm shortcuts to their remote URLs so ffmpeg can open the
+	// actual media stream. Cached .sup inputs skip resolution — they are
+	// elementary streams, not container shortcuts.
+	inputPath := opts.InputPath
+	if !opts.InputIsExtractedSup {
+		resolved, err := resolveTranscodeInputPath(inputPath)
+		if err != nil {
+			return fmt.Errorf("resolve subtitle input path: %w", err)
+		}
+		inputPath = resolved
+	}
+	opts.InputPath = inputPath
+
 	bin := opts.FFmpegPath
 	if bin == "" {
 		bin = "ffmpeg"

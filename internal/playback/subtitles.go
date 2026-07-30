@@ -58,6 +58,14 @@ func IsASS(codec string) bool {
 // It returns the raw subtitle data, the detected format (e.g., "srt", "ass"),
 // and any error encountered.
 func ExtractSubtitle(ctx context.Context, filePath string, trackIndex int, ffmpegPath ...string) ([]byte, string, error) {
+	// Resolve .strm shortcuts to their remote URLs so ffmpeg can open the
+	// actual media stream instead of the text shortcut file.
+	resolved, err := resolveTranscodeInputPath(filePath)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve subtitle input path: %w", err)
+	}
+	filePath = resolved
+
 	// Determine the output format based on what ffmpeg can extract.
 	// We default to SRT as a safe text-based format.
 	outputFormat := "srt"
@@ -101,6 +109,13 @@ func ExtractSubtitleWithFormat(ctx context.Context, filePath string, trackIndex 
 	default:
 		return nil, fmt.Errorf("unsupported subtitle extraction format: %q (must be \"srt\" or \"ass\")", outputFormat)
 	}
+
+	// Resolve .strm shortcuts to their remote URLs.
+	resolved, err := resolveTranscodeInputPath(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve subtitle input path: %w", err)
+	}
+	filePath = resolved
 
 	args := []string{
 		"-i", filePath,

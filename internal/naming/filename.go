@@ -282,6 +282,13 @@ func parseTitleYearCandidate(name string) (string, int) {
 		return "", 0
 	}
 
+	// Strip release cruft before structured year extraction so metadata
+	// matching sees a clean title (mirrors stripInferReleaseTokens in
+	// root_inference.go — keep both in sync).
+	if cleaned := stripInferReleaseTokens(candidate); cleaned != "" {
+		candidate = cleaned
+	}
+
 	if m := titleYearRe.FindStringSubmatch(candidate); m != nil {
 		year, _ := strconv.Atoi(m[2])
 		return strings.TrimSpace(m[1]), year

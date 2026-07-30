@@ -53,6 +53,13 @@ func ExtractAttachedSubtitleFonts(ctx context.Context, inputPath string, ffmpegP
 		return nil, fmt.Errorf("subtitle fonts: input path is required")
 	}
 
+	// Resolve .strm shortcuts to their remote URLs.
+	resolved, err := resolveTranscodeInputPath(inputPath)
+	if err != nil {
+		return nil, fmt.Errorf("subtitle fonts: resolve input path: %w", err)
+	}
+	inputPath = resolved
+
 	streams, err := probeFontAttachmentStreams(ctx, inputPath, ffprobePathFromFFmpeg(ffmpegPath))
 	if err != nil {
 		return nil, err

@@ -13,7 +13,7 @@ import (
 var (
 	inferTitleYearRe       = regexp.MustCompile(`^(.+?)\s*\((\d{4})\)`)
 	inferWhitespaceTokenRe = regexp.MustCompile(`\s+`)
-	inferReleaseTokenRe    = regexp.MustCompile(`(?i)\b(?:remux|bluray|bdrip|brrip|web[ ._-]?dl|webrip|hdr|dv|2160p|1080p|720p|x264|x265|h\.?264|h\.?265|hevc|av1|aac|dts|truehd|atmos)\b`)
+	inferReleaseTokenRe    = regexp.MustCompile(`(?i)\b(?:remux|bluray|bdrip|brrip|web[ ._-]?dl|webrip|hdr|dv|2160p|1080p|720p|x264|x265|h\.?264|h\.?265|hevc|av1|aac|dts|truehd|atmos|eac3|ac3|flac|opus|mp3|ddp?5\.1|ddp?7\.1|ddp?2\.0)\b`)
 	inferSeasonEpisodeRe   = regexp.MustCompile(`(?i)[Ss](\d{1,4})[Ee](\d{1,3})`)
 	inferSeasonDirRe       = regexp.MustCompile(`(?i)^Season\s+(\d{1,4})(?:\s.*)?$`)
 	inferNumericSeasonRe   = regexp.MustCompile(`^\d{1,4}$`)
@@ -22,6 +22,34 @@ var (
 	// ([tvdb-{TvdbId}]), or an empty token ({imdb-}). The id part is either a
 	// {...} placeholder or zero-or-more word chars.
 	inferProviderTagRe = regexp.MustCompile(`\s*[{\[](?:tmdb|tmdbid|imdb|imdbid|tvdb|tvdbid)-(?:\{[^}]*\}|[\w]*)[}\]]`)
+
+	// ----- title cleaning regexes: strip release cruft before metadata matching -----
+
+	// Square-bracketed tags: [Dual Audio], [Hindi 5.1+English 5.1],
+	// [Hindi (Clean)+English CAM], [DUAL-AUDIO], [ESub], etc.
+	inferBracketedTagRe = regexp.MustCompile(`\s*\[[^\]]*(?i)(?:dual[ ._-]?audio|multi[ ._-]?audio|hindi|english|tamil|telugu|malayalam|kannada|bengali|punjabi|gujarati|marathi|esub|subs?)(?:[^\]]*)\]`)
+
+	// Parenthetical year ranges: (TV Series 2009–2010), (2009–2010),
+	// (2009 - 2010), (TV Series 2009-10), (TV Series 2024–),
+	// (TV Mini Series 2016), etc. Must NOT match plain (2008) —
+	// that is a useful year that parseInferFolderTitleYear needs.
+	// Requires either a "TV Series"/"Mini Series" prefix or a dash.
+	inferYearRangeRe = regexp.MustCompile(`\s*\((?:TV\s*(?:Mini[ ._-]?\s*)?Series\s*)\d{4}(?:\s*[–\-]\s*(?:\d{2,4})?(?:\s*[–\-])?)?\)|\s*\(\d{4}\s*[–\-]\s*(?:\d{2,4})?\)`)
+
+	// Trailing release group and scene suffixes. Anchored to end of string.
+	// Examples: -HDHub, -MsMod, -mkvC, -RARBG, -ION10, -DDR, -Telly,
+	//           -WARRNING (sic), -EZTV, -mSD, -minx, -ETHEL.
+	// Also catches -[scene] and .[scene] variants (case-insensitive).
+	inferReleaseSuffixRe = regexp.MustCompile(`(?i)[ .\-–](?:hdhub|msmod|mkvc|rarbg|ion\d*|ddr|telly|war?r?ning|eztv|msd|minx|ethel|megusta|galaxyrg|psa|yify|yts|cmrg|crazy|sadece|avi|evo|hive|mzabi|vyndros|flux|fgt|saint|samppa|mundane|tigole|prof|mteam|ntb|ntg|tps|ebp|playnow|fleet|phoenix|mzabi|smurf|emx|tigole)\b[ .\-–]*$`)
+
+	// Source/quality/edition tokens that are NOT covered by
+	// inferReleaseTokenRe (that regex requires word-boundary isolation).
+	// Covers compound tokens like "HDTC", "AMZN", "WEBRip", "HC-HDRip",
+	// and edition markers like "Unrated", "Extended", "Director's Cut".
+	inferSourceQualityRe = regexp.MustCompile(`(?i)\b(?:hdtc|hdcam|amzn|web[ ._-]?rip|hmax|dsnp|nf|atvp|hulu|peacock|hc[ ._-]?hdrip|unrated|extended|directors?[ ._-]?cut|theatrical|special[ ._-]?edition|remastered|imax|open[ ._-]?matte)\b`)
+
+	// Version/part markers: V2, V3, PART 1, CD1, etc.
+	inferVersionPartRe = regexp.MustCompile(`(?i)\b(?:v\d+|part[ ._-]?\d+|cd\d+|disc[ ._-]?\d+|proper|repack|rerip|internal|limited|readnfo)\b`)
 )
 
 type RootAssignment struct {
@@ -529,6 +557,11 @@ func parseInferTitleYear(name string) (string, int) {
 	if surface == "" {
 		return "", 0
 	}
+	// Strip release cruft before attempting structured year extraction.
+	cleaned := stripInferReleaseTokens(surface)
+	if cleaned != "" {
+		surface = cleaned
+	}
 	if title, year, trusted := parseInferFolderTitleYear(surface); trusted {
 		return title, year
 	}
@@ -547,4 +580,38 @@ func parseInferTitleYear(name string) (string, int) {
 
 func stripInferProviderTags(name string) string {
 	return strings.TrimSpace(inferProviderTagRe.ReplaceAllString(name, " "))
+}
+
+// stripInferReleaseTokens removes common release-related cruft from folder
+// names so metadata provider matching sees a clean title. Applied before
+// structured year extraction in parseInferTitleYear.
+func stripInferReleaseTokens(name string) string {
+	s := name
+
+	// 1. Strip square-bracketed language/audio tags: [Dual Audio],
+	//    [Hindi 5.1+English 5.1], [ESub], etc.
+	s = inferBracketedTagRe.ReplaceAllString(s, " ")
+
+	// 2. Strip parenthetical year ranges: (TV Series 2009–2010), (2009-10).
+	s = inferYearRangeRe.ReplaceAllString(s, " ")
+
+	// 3. Strip trailing release group and scene suffixes: -HDHub, -RARBG, etc.
+	s = inferReleaseSuffixRe.ReplaceAllString(s, "")
+
+	// 4. Strip source/quality tokens: HDTC, AMZN, Unrated, etc.
+	s = inferSourceQualityRe.ReplaceAllString(s, " ")
+
+	// 5. Strip version/part markers: V2, PROPER, CD1, etc.
+	s = inferVersionPartRe.ReplaceAllString(s, " ")
+
+	// 6. Strip standalone technical tokens (codecs, resolutions, etc.)
+	s = inferReleaseTokenRe.ReplaceAllString(s, " ")
+
+	// Collapse resulting whitespace.
+	s = collapseWhitespace(strings.TrimSpace(s))
+
+	if s == "" || s == name {
+		return ""
+	}
+	return s
 }

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Silo-Server/silo-server/internal/lang"
 	"github.com/Silo-Server/silo-server/internal/models"
@@ -152,6 +153,78 @@ func ProbeFile(ctx context.Context, ffprobePath string, filePath string) (*Probe
 	}
 
 	return probe, nil
+}
+
+// ProbeRemoteURL runs ffprobe against a remote HTTP/HTTPS URL with aggressive
+// read limits so only container headers are fetched — not the full file.
+// It uses a tiered strategy: 256 KB → 1 MB → 5 MB → give up. Each tier only
+// fires if the previous one found no audio tracks (the signal that ffprobe
+// couldn't reach the container headers within the limit). The timeout shrinks
+// across tiers so the total worst-case stays bounded (~25 s).
+func ProbeRemoteURL(ctx context.Context, ffprobePath string, url string) (*ProbeData, error) {
+	// Tier 1: 256 KB — sufficient for the vast majority of MKV/MP4/TS
+	// files whose container headers sit at the front.
+	probe, err := probeRemoteWithLimit(ctx, ffprobePath, url, "256K", "256000", 12*time.Second)
+	if err == nil && probe != nil && len(probe.AudioTracks) > 0 {
+		return probe, nil
+	}
+
+	// Tier 2: 1 MB — retry for files with moderately large headers
+	// (many audio/subtitle tracks, embedded chapter data).
+	if err != nil || (probe != nil && len(probe.AudioTracks) == 0) {
+		probe, err = probeRemoteWithLimit(ctx, ffprobePath, url, "1M", "1000000", 8*time.Second)
+		if err == nil && probe != nil && len(probe.AudioTracks) > 0 {
+			return probe, nil
+		}
+	}
+
+	// Tier 3: 5 MB — last resort for files with very large headers
+	// (huge embedded cover art pushed the Tracks element deep).
+	if err != nil || (probe != nil && len(probe.AudioTracks) == 0) {
+		probe, err = probeRemoteWithLimit(ctx, ffprobePath, url, "5M", "5000000", 5*time.Second)
+		if err == nil && probe != nil && len(probe.AudioTracks) > 0 {
+			return probe, nil
+		}
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	if probe == nil {
+		return nil, fmt.Errorf("remote ffprobe returned no data for %s", url)
+	}
+	return nil, fmt.Errorf("remote ffprobe found no audio tracks for %s", url)
+}
+
+// probeRemoteWithLimit runs a single ffprobe attempt with the given limits.
+func probeRemoteWithLimit(ctx context.Context, ffprobePath, url, probeSize, analyzeDuration string, timeout time.Duration) (*ProbeData, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(probeCtx, ffprobePath,
+		"-v", "quiet",
+		"-print_format", "json",
+		"-show_format",
+		"-show_streams",
+		"-show_chapters",
+		"-probesize", probeSize,
+		"-analyzeduration", analyzeDuration,
+		"-timeout", "10000000",
+		url,
+	)
+
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("remote ffprobe failed for %s: %w", url, err)
+	}
+
+	var raw ffprobeOutput
+	if err := json.Unmarshal(output, &raw); err != nil {
+		return nil, fmt.Errorf("ffprobe JSON parse failed for remote %s: %w", url, err)
+	}
+
+	// Remote files don't need the packet-scan duration fallback.
+	return convertProbeData(&raw), nil
 }
 
 // FFprobePathFromFFmpeg derives the sibling ffprobe binary path from a configured ffmpeg path.

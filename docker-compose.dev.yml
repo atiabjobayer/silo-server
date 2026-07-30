@@ -47,7 +47,7 @@ services:
         FROM golang:1.26
 
         ENV CGO_ENABLED=1
-        ENV GOPROXY=direct
+        ENV GOPROXY=https://proxy.golang.org,direct
         ENV GOPRIVATE=github.com/Silo-Server/*
         ENV GONOSUMDB=github.com/Silo-Server/*
 
@@ -65,45 +65,26 @@ services:
         RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
             ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
-        RUN go install github.com/air-verse/air@latest
-
         WORKDIR /app
+        COPY go.mod go.sum ./
+        COPY internal/compat/zishang520-webtransport-go/ internal/compat/zishang520-webtransport-go/
+        RUN --mount=type=cache,target=/root/.cache/go-build \
+            --mount=type=cache,target=/go/pkg/mod \
+            go mod download
+
+        COPY web/embed.go web/embed.go
+        RUN mkdir -p web/dist && \
+            printf '%s\n' '<!doctype html><html><body><div id="root"></div></body></html>' > web/dist/index.html
+
+        COPY cmd/ cmd/
+        COPY internal/ internal/
+        COPY migrations/ migrations/
+        RUN --mount=type=cache,target=/root/.cache/go-build \
+            --mount=type=cache,target=/go/pkg/mod \
+            go build -o /silo ./cmd/silo/
+        ENTRYPOINT ["/silo"]
+    image: silo-dev-silo
     restart: unless-stopped
-    working_dir: /app
-    command:
-      - sh
-      - -c
-      - |
-        mkdir -p tmp web/dist
-        if [ ! -f web/dist/index.html ]; then
-          printf '%s\n' '<!doctype html><html><body><div id="root"></div></body></html>' > web/dist/index.html
-        fi
-
-        cat >/tmp/air.docker.toml <<'AIR'
-        root = "."
-        tmp_dir = "tmp"
-
-        [build]
-          cmd = "go build -o ./tmp/silo ./cmd/silo/"
-          bin = "./tmp/silo"
-          args_bin = []
-          include_ext = ["go", "sql", "json"]
-          include_dir = ["cmd", "internal", "migrations"]
-          exclude_dir = ["tmp", "vendor", "third_party", "docs", "scripts", "web"]
-          exclude_regex = ["_test\\.go$"]
-          delay = 500
-          stop_on_error = true
-          kill_delay = 500
-          send_interrupt = true
-
-        [log]
-          time = true
-
-        [misc]
-          clean_on_exit = true
-        AIR
-
-        air -c /tmp/air.docker.toml
     environment:
       MODE: integrated
       PORT: "8080"
@@ -116,10 +97,6 @@ services:
       - "${JF_PORT:-8096}:8096"
       - "${ABS_PORT:-13378}:13378"
     volumes:
-      - .:/app
-      - silo-dev-air-tmp:/app/tmp
-      - silo-dev-go-build:/root/.cache/go-build
-      - silo-dev-go-mod:/go/pkg/mod
       - silo-dev-plugins:/var/lib/silo/plugins
       - silo-dev-compat:/var/lib/silo/compat
       - silo-dev-transcode:/tmp/silo-transcode
@@ -135,7 +112,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 30
-      start_period: 10s
+      start_period: 5m
     env_file:
       - path: .env
         required: false
@@ -168,11 +145,8 @@ services:
         condition: service_healthy
 
 volumes:
-  silo-dev-air-tmp:
   silo-dev-audiobook-covers:
   silo-dev-compat:
-  silo-dev-go-build:
-  silo-dev-go-mod:
   silo-dev-plugins:
   silo-dev-pnpm-store:
   silo-dev-postgres:
