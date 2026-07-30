@@ -421,16 +421,14 @@ docker compose -f docker-compose-proxmox.yml up -d
 ### 3.6 Verify
 
 ```bash
-# Health check
-curl -s http://localhost:80/api/v1/health
-# Should return: {"status":"ok"}
+# Health check (API is on 8090 internally, web proxies on 80)
+curl -s http://localhost:8090/api/v1/health
 
 # HW acceleration status
-curl -s http://localhost:80/hw-capabilities | python3 -m json.tool
-# Should show: "resolved": "qsv", "intel_detected": true
+curl -s http://localhost:8090/hw-capabilities | python3 -m json.tool
 ```
 
-Open `http://<silo-api-ip>` in your browser — the UI serves on port 80. Complete the setup wizard:
+Open `http://<silo-api-ip>` in your browser — the web UI serves on port 80 (Vite preview proxying to the silo backend on port 8090). Complete the setup wizard:
 
 - Point S3 at `http://<silo-minio-ip>:9000` with the access key from Section 1.3
 - Add your media library (the `.strm` directory mounted at `/mnt/media`)
