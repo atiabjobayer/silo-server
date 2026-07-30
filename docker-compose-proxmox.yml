@@ -1,0 +1,81 @@
+# Silo API + Web Frontend — Proxmox distributed deployment
+# Runs on CT 101 (silo-api). PostgreSQL and Redis are on CT 100 (silo-db).
+# Transcode nodes are on CTs 102–103 and registered via the admin UI.
+
+name: silo-api
+
+services:
+  silo:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM node:22-slim AS node_runtime
+
+        FROM golang:1.26
+
+        ENV CGO_ENABLED=1
+        ENV GOPROXY=https://proxy.golang.org,direct
+        ENV GOPRIVATE=github.com/Silo-Server/*
+        ENV GONOSUMDB=github.com/Silo-Server/*
+
+        RUN apt-get update && apt-get install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            ffmpeg \
+            git \
+            libvips-dev \
+            pkg-config \
+          && rm -rf /var/lib/apt/lists/*
+
+        COPY --from=node_runtime /usr/local/bin/node /usr/local/bin/node
+        COPY --from=node_runtime /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+        RUN ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+            ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
+        WORKDIR /app
+        COPY go.mod go.sum ./
+        COPY internal/compat/zishang520-webtransport-go/ internal/compat/zishang520-webtransport-go/
+        RUN --mount=type=cache,target=/root/.cache/go-build \
+            --mount=type=cache,target=/go/pkg/mod \
+            go mod download
+
+        COPY web/embed.go web/embed.go
+        RUN mkdir -p web/dist && \
+            printf '%s\n' '<!doctype html><html><body><div id="root"></div></body></html>' > web/dist/index.html
+
+        COPY cmd/ cmd/
+        COPY internal/ internal/
+        COPY migrations/ migrations/
+        RUN --mount=type=cache,target=/root/.cache/go-build \
+            --mount=type=cache,target=/go/pkg/mod \
+            go build -o /silo ./cmd/silo/
+        ENTRYPOINT ["/silo"]
+    image: silo-api:latest
+    restart: unless-stopped
+    environment:
+      MODE: integrated
+      PORT: "8080"
+      SECRET_KEY: "${SECRET_KEY:?Set SECRET_KEY — generate with: openssl rand -base64 48}"
+      DATABASE_URL: "${DATABASE_URL:?Set DATABASE_URL — e.g. postgres://silo:silo@silo-db-ip:5432/silo?sslmode=disable}"
+      REDIS_URL: "${REDIS_URL:?Set REDIS_URL — e.g. redis://silo-db-ip:6379}"
+      POSTGRES_TUNE: "off"
+    ports:
+      - "80:8080"       # Web UI (browser)
+      - "8096:8096"     # Jellyfin-compatible apps
+      - "13378:13378"   # Audiobookshelf-compatible apps
+    volumes:
+      - "${MEDIA_ROOT:?Set MEDIA_ROOT to your .strm files path}:${MEDIA_CONTAINER_ROOT:-/mnt/media}:ro"
+      - silo-data:/var/lib/silo
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/v1/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+    env_file:
+      - path: .env
+        required: false
+
+volumes:
+  silo-data:
+

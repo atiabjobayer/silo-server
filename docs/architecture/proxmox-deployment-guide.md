@@ -8,11 +8,11 @@
 
 | CT ID | Name           | vCPUs | RAM  | Swap   | SSD (root) | HDD (data) | Purpose                          |
 | ----- | -------------- | ----- | ---- | ------ | ---------- | ---------- | -------------------------------- |
-| 100   | **silo-db**    | 3     | 5 GB | 2 GB   | 60 GB      | —          | PostgreSQL 18 + pgvector + Redis |
-| 101   | **silo-api**   | 2     | 2 GB | 1 GB   | 15 GB      | —          | Silo API server + web frontend   |
-| 102   | **silo-tc-1**  | 5     | 2 GB | 1 GB   | 10 GB      | 120 GB     | Transcode worker #1              |
-| 103   | **silo-tc-2**  | 5     | 2 GB | 1 GB   | 10 GB      | 120 GB     | Transcode worker #2              |
-| 104   | **silo-minio** | 1     | 1 GB | 512 MB | 10 GB      | 60 GB      | S3-compatible object storage     |
+| 100   | **silo-api**   | 2     | 2 GB | 1 GB   | 15 GB      | —          | Silo API server + web frontend   |
+| 101   | **silo-minio** | 1     | 1 GB | 512 MB | 10 GB      | 60 GB      | S3-compatible object storage     |
+| 102   | **silo-db**    | 3     | 5 GB | 2 GB   | 60 GB      | —          | PostgreSQL 18 + pgvector + Redis |
+| 103   | **silo-tc-1**  | 5     | 2 GB | 1 GB   | 10 GB      | 120 GB     | Transcode worker #1              |
+| 104   | **silo-tc-2**  | 5     | 2 GB | 1 GB   | 10 GB      | 120 GB     | Transcode worker #2              |
 | —     | **Proxmox OS** | —     | 2 GB | —      | 30 GB      | —          | Hypervisor overhead              |
 | —     | **Free**       | 0     | 2 GB | —      | 121 GB     | 700 GB     | Headroom                         |
 
@@ -27,70 +27,91 @@ pveam download local ubuntu-26.04-standard_26.04-1_amd64.tar.zst
 
 # Create the CTs (all unprivileged with nesting for Docker)
 pct create 100 local:vztmpl/ubuntu-26.04-standard_26.04-1_amd64.tar.zst \
-  --hostname silo-db --cores 3 --memory 5120 --swap 2048 --rootfs local-lvm:60 \
-  --net0 name=eth0,bridge=vmbr0,ip=dhcp --unprivileged 1 --features nesting=1
-
-pct create 101 local:vztmpl/ubuntu-26.04-standard_26.04-1_amd64.tar.zst \
   --hostname silo-api --cores 2 --memory 2048 --swap 1024 --rootfs local-lvm:15 \
   --net0 name=eth0,bridge=vmbr0,ip=dhcp --unprivileged 1 --features nesting=1
 
+pct create 101 local:vztmpl/ubuntu-26.04-standard_26.04-1_amd64.tar.zst \
+  --hostname silo-minio --cores 1 --memory 1024 --swap 512 --rootfs local-lvm:10 \
+  --net0 name=eth0,bridge=vmbr0,ip=dhcp --unprivileged 1 --features nesting=1
+
 pct create 102 local:vztmpl/ubuntu-26.04-standard_26.04-1_amd64.tar.zst \
-  --hostname silo-tc-1 --cores 5 --memory 2048 --swap 1024 --rootfs local-lvm:10 \
+  --hostname silo-db --cores 3 --memory 5120 --swap 2048 --rootfs local-lvm:60 \
   --net0 name=eth0,bridge=vmbr0,ip=dhcp --unprivileged 1 --features nesting=1
 
 pct create 103 local:vztmpl/ubuntu-26.04-standard_26.04-1_amd64.tar.zst \
-  --hostname silo-tc-2 --cores 5 --memory 2048 --swap 1024 --rootfs local-lvm:10 \
+  --hostname silo-tc-1 --cores 5 --memory 2048 --swap 1024 --rootfs local-lvm:10 \
   --net0 name=eth0,bridge=vmbr0,ip=dhcp --unprivileged 1 --features nesting=1
 
 pct create 104 local:vztmpl/ubuntu-26.04-standard_26.04-1_amd64.tar.zst \
-  --hostname silo-minio --cores 1 --memory 1024 --swap 512 --rootfs local-lvm:10 \
+  --hostname silo-tc-2 --cores 5 --memory 2048 --swap 1024 --rootfs local-lvm:10 \
   --net0 name=eth0,bridge=vmbr0,ip=dhcp --unprivileged 1 --features nesting=1
 ```
 
-### Bind-mount HDD storage (Proxmox host)
+### Bind-mount storage (Proxmox host)
+
+Some mounts are created via the Proxmox GUI during CT creation (storage-backed volumes from `hdd-thin`), others are directory bind-mounts from the host filesystem. The final config for each CT should look like:
+
+| CT               | mp0                                             | mp1                            |
+| ---------------- | ----------------------------------------------- | ------------------------------ |
+| 100 (silo-api)   | `/mnt/media` (media files, ro)                  | —                              |
+| 101 (silo-minio) | `/mnt/minio-data` (bucket, 60 GB from hdd-thin) | —                              |
+| 102 (silo-db)    | —                                               | —                              |
+| 103 (silo-tc-1)  | `/var/lib/silo-transcode` (120 GB from hdd-thin)    | `/mnt/media` (media files, ro) |
+| 104 (silo-tc-2)  | `/var/lib/silo-transcode` (120 GB from hdd-thin)    | `/mnt/media` (media files, ro) |
+
+#### Transcode temp (hdd-thin) — created via GUI during CT creation
+
+For CT 103 and 104, add a mount point in the creation wizard:
+
+- **Storage:** `hdd-thin`
+- **Disk size:** `120` GiB
+- **Path:** `/var/lib/silo-transcode`
+
+Or via CLI after creation:
 
 ```bash
-mkdir -p /mnt/hdd/transcode /mnt/hdd/minio
-
-# Transcode temp storage (shared by both TC nodes)
-pct set 102 -mp0 /mnt/hdd/transcode,/tmp/silo-transcode
-pct set 103 -mp0 /mnt/hdd/transcode,/tmp/silo-transcode
-
-# MinIO bucket data
-pct set 104 -mp0 /mnt/hdd/minio,/mnt/minio-data
+pct set 103 -mp0 hdd-thin:120,mp=/var/lib/silo-transcode
+pct set 104 -mp0 hdd-thin:120,mp=/var/lib/silo-transcode
 ```
 
-### Media files mount (`.strm` content)
+#### MinIO bucket (hdd-thin) — created via GUI
 
-Your `.strm` files live on the Proxmox host or a network share. Mount them read-only into the API and transcode CTs at the same path so the scanner and ffmpeg can both find them.
-
-**If your `.strm` files are on the Proxmox host** (e.g., on the HDD at `/mnt/hdd/media`):
+For CT 101, add during creation or after:
 
 ```bash
-# Bind-mount into API and both TC containers
-pct set 101 -mp0 /mnt/hdd/media,/mnt/media,ro=1
-pct set 102 -mp1 /mnt/hdd/media,/mnt/media,ro=1
-pct set 103 -mp1 /mnt/hdd/media,/mnt/media,ro=1
+pct set 101 -mp0 hdd-thin:60,mp=/mnt/minio-data
 ```
 
-**If your `.strm` files are on a NAS or another machine,** mount them on the Proxmox host first via NFS/SMB, then bind-mount into the CTs:
+#### Media files (directory bind-mount from host)
+
+Your `.strm` files live on the Proxmox host at `/mnt/media`. Mount them read-only into the API and both TC containers:
 
 ```bash
-# On Proxmox host — mount the NAS
-mkdir -p /mnt/nas-media
-mount -t nfs 192.168.1.100:/media /mnt/nas-media
-# Make permanent in /etc/fstab:
-# 192.168.1.100:/media /mnt/nas-media nfs defaults,ro 0 0
+# Transfer .strm files to the host first (from your Mac):
+# scp -r /Users/atiab/Desktop/strm_library_sam/* root@<proxmox-ip>:/mnt/media/
 
-# Bind-mount into CTs
-pct set 101 -mp0 /mnt/nas-media,/mnt/media,ro=1
-pct set 102 -mp1 /mnt/nas-media,/mnt/media,ro=1
-pct set 103 -mp1 /mnt/nas-media,/mnt/media,ro=1
+# Mount into API (uses mp0 — no hdd-thin volumes on this CT)
+pct set 100 -mp0 /mnt/media,/mnt/media,ro=1
+
+# Mount into TC nodes (uses mp1 — mp0 is already taken by transcode temp)
+pct set 103 -mp1 /mnt/media,/mnt/media,ro=1
+pct set 104 -mp1 /mnt/media,/mnt/media,ro=1
 ```
 
-> **Why `ro=1` (read-only):** Silo never writes to your media files. Read-only mounts prevent accidental modification and are a security best practice.
+If mp1 already exists as a placeholder, clear it first:
 
-> **Why transcode nodes need it too:** When a transcode session starts, the node receives the `.strm` file path and calls `resolveTranscodeInputPath()` to read the remote URL from it. The file must exist on disk at the same path on the TC node as on the API server.
+```bash
+pct set 103 --delete mp1 && pct set 103 -mp1 /mnt/media,/mnt/media,ro=1
+pct set 104 --delete mp1 && pct set 104 -mp1 /mnt/media,/mnt/media,ro=1
+```
+
+Verify all mounts:
+
+```bash
+pct config 103 | grep "^mp"
+# mp0: hdd-thin:vm-103-disk-1,mp=/var/lib/silo-transcode,size=120G
+# mp1: /mnt/media,/mnt/media,ro=1
+```
 
 ### Typical folder structure
 
@@ -206,7 +227,7 @@ echo "=== All CTs ready ==="
 
 ---
 
-## 1. MinIO — S3 Object Storage (CT 104)
+## 1. MinIO — S3 Object Storage (CT 101)
 
 **Resources:** 1 vCPU · 1 GB RAM · 10 GB SSD · 60 GB HDD for bucket data
 
@@ -257,7 +278,7 @@ curl -s http://<silo-minio-ip>:9000/silo/
 
 ---
 
-## 2. PostgreSQL + pgvector + Redis (CT 100)
+## 2. PostgreSQL + pgvector + Redis (CT 102)
 
 **Resources:** 3 vCPU · 5 GB RAM · 60 GB SSD
 
@@ -344,7 +365,7 @@ redis-cli -h <silo-db-ip> ping
 
 ---
 
-## 3. Silo API + Web Frontend (CT 101)
+## 3. Silo API + Web Frontend (CT 100)
 
 **Resources:** 2 vCPU · 2 GB RAM · 15 GB SSD
 
@@ -373,74 +394,43 @@ The build happens entirely inside Docker — no Go toolchain needed on the host.
 
 ```bash
 cd /opt/silo
-docker compose -f docker-compose.dev.yml build silo --no-cache
+docker compose -f docker-compose-proxmox.yml build silo --no-cache
 ```
 
-This compiles the Go backend with all our customizations (.strm ffprobe, release-token regex, subtitle path fixes) into a local Docker image tagged `silo-dev-silo:latest`.
+This compiles the Go backend with all our customizations (.strm ffprobe, release-token regex, subtitle path fixes) into a local Docker image tagged `silo-api:latest`. The Go toolchain runs inside the Docker build — nothing to install on the host.
 
-### 3.4 Docker Compose for the API server
-
-Create `/opt/silo/docker-compose.yml`:
-
-```yaml
-services:
-  silo:
-    image: silo-dev-silo:latest # built locally in step 3.3
-    restart: unless-stopped
-    environment:
-      MODE: integrated
-      PORT: "8080"
-      SECRET_KEY: "<the-base64-key-from-step-3.1>"
-      DATABASE_URL: postgres://silo:silo@<silo-db-ip>:5432/silo?sslmode=disable
-      REDIS_URL: redis://<silo-db-ip>:6379
-      POSTGRES_TUNE: "off"
-    ports:
-      - "8090:8080" # Web UI + API
-      - "8096:8096" # Jellyfin-compatible apps
-      - "13378:13378" # Audiobookshelf-compatible apps
-    volumes:
-      - /mnt/media:/mnt/media:ro # your .strm files location
-      - silo-plugins:/var/lib/silo/plugins
-      - silo-compat:/var/lib/silo/compat
-      - /dev/dri:/dev/dri # Intel iGPU for QSV
-    devices:
-      - /dev/dri:/dev/dri
-    env_file:
-      - .env
-
-volumes:
-  silo-plugins:
-  silo-compat:
-```
+### 3.4 Environment file
 
 Create `/opt/silo/.env`:
 
 ```env
-# Optional overrides — the docker-compose.yml already has sensible defaults.
-# MEDIA_ROOT=/mnt/media
-# SILO_PUBLIC_URL=http://<silo-api-ip>:8090
+SECRET_KEY=<the-base64-key-from-step-3.1>
+DATABASE_URL=postgres://silo:silo@<silo-db-ip>:5432/silo?sslmode=disable
+REDIS_URL=redis://<silo-db-ip>:6379
+MEDIA_ROOT=/mnt/media
 # SERVER_LOG_LEVEL=debug    # enable temporarily for troubleshooting
 ```
 
-Start it:
+### 3.5 Start the API server
 
 ```bash
-cd /opt/silo && docker compose up -d
+cd /opt/silo
+docker compose -f docker-compose-proxmox.yml up -d
 ```
 
-### 3.5 Verify
+### 3.6 Verify
 
 ```bash
 # Health check
-curl -s http://localhost:8090/api/v1/health
+curl -s http://localhost:80/api/v1/health
 # Should return: {"status":"ok"}
 
 # HW acceleration status
-curl -s http://localhost:8090/hw-capabilities | python3 -m json.tool
+curl -s http://localhost:80/hw-capabilities | python3 -m json.tool
 # Should show: "resolved": "qsv", "intel_detected": true
 ```
 
-Open `http://<silo-api-ip>:8090` in your browser. Complete the setup wizard:
+Open `http://<silo-api-ip>` in your browser — the UI serves on port 80. Complete the setup wizard:
 
 - Point S3 at `http://<silo-minio-ip>:9000` with the access key from Section 1.3
 - Add your media library (the `.strm` directory mounted at `/mnt/media`)
@@ -457,13 +447,15 @@ Set **Local transcode fallback** to **Disabled** — this forces all transcoding
 
 ---
 
-## 4. Transcode Nodes (CT 102 & CT 103)
+## 4. Transcode Nodes (CT 103 & CT 104)
 
 **Resources each:** 5 vCPU · 2 GB RAM · 10 GB SSD · 120 GB HDD
 
 These use the **stock DockerHub image** — no custom build needed. The HDD transcode storage and media mounts were already set up in the bind-mount section at the top of this guide.
 
-> **Note:** Both transcode CTs share the same HDD directory for temp files. Each session writes to a unique subdirectory (`/tmp/silo-transcode/<session-uuid>/`), so there's no collision. Old sessions are cleaned up when playback ends.
+> **Note:** Both transcode CTs write HLS segments to this volume. Each session gets a unique subdirectory (`/var/lib/silo-transcode/<session-uuid>/`), so there's no collision. Old sessions are cleaned up when playback ends.
+
+> **Why `/var/lib/silo-transcode` and not `/tmp/silo-transcode`:** Ubuntu LXC containers mount `/tmp` as a separate tmpfs, which swallows any block device mount underneath it. Using a path outside `/tmp` avoids this collision.
 
 ### 4.1 Docker Compose (identical on both CTs)
 
@@ -472,7 +464,7 @@ Create `/opt/silo-tc/docker-compose.yml`:
 ```yaml
 services:
   silo-transcode:
-    image: ghcr.io/silo-server/silo-server:latest # stock image
+    image: ghcr.io/silo-server/silo-server:latest   # stock image
     restart: unless-stopped
     environment:
       MODE: transcode
@@ -481,13 +473,13 @@ services:
       SECRET_KEY: "<same-key-from-section-3.1>"
       DATABASE_URL: postgres://silo:silo@<silo-db-ip>:5432/silo?sslmode=disable
       REDIS_URL: redis://<silo-db-ip>:6379
-      NODE_NAME: tc-1 # tc-2 on the other CT
+      NODE_NAME: tc-1                  # tc-2 on the other CT
     ports:
-      - "8080:8080" # transcode API (called by the API server)
+      - "8080:8080"                    # transcode API (called by the API server)
     volumes:
-      - /tmp/silo-transcode:/tmp/silo-transcode
-      - /mnt/media:/mnt/media:ro # .strm files (same path as API server)
-      - /dev/dri:/dev/dri # Intel iGPU for QSV
+      - /var/lib/silo-transcode:/var/lib/silo-transcode
+      - /mnt/media:/mnt/media:ro        # .strm files (same path as API server)
+      - /dev/dri:/dev/dri               # Intel iGPU for QSV
     devices:
       - /dev/dri:/dev/dri
 ```
@@ -497,6 +489,16 @@ Start it:
 ```bash
 cd /opt/silo-tc && docker compose up -d
 ```
+
+#### Set the transcode directory
+
+In the Silo admin UI, go to **Settings → Playback** and set:
+
+```
+playback.transcode_dir = /var/lib/silo-transcode
+```
+
+This tells both the API server and transcode nodes where to write HLS segments. If you don't set this, the default `/tmp/silo-transcode` will be used — which won't work because `/tmp` is a tmpfs inside Ubuntu containers.
 
 ### 4.2 Verify
 
@@ -520,10 +522,11 @@ Do exactly the same on CT 103, but set `NODE_NAME: tc-2` in the compose file.
 - [ ] MinIO console accessible at `http://<silo-minio-ip>:9001`
 - [ ] PostgreSQL reachable from API and transcode CTs: `psql -h <silo-db-ip> -U silo -d silo`
 - [ ] Redis reachable: `redis-cli -h <silo-db-ip> ping` → `PONG`
-- [ ] Silo Web UI loads at `http://<silo-api-ip>:8090`
+- [ ] Silo Web UI loads at `http://<silo-api-ip>` (port 80)
 - [ ] S3 configured in Silo setup wizard → test connection succeeds
 - [ ] Media library added → scan completes
 - [ ] Both transcode nodes appear in Admin → Nodes
+- [ ] `playback.transcode_dir` set to `/var/lib/silo-transcode` in Admin → Settings → Playback
 - [ ] HW acceleration reports `qsv` on all three Silo instances (API + both TC nodes)
 - [ ] Playback test: start a stream → check Admin → Active Sessions shows `transcode_hw_accel: qsv`
 
@@ -531,15 +534,15 @@ Do exactly the same on CT 103, but set `NODE_NAME: tc-2` in the compose file.
 
 ## 6. Network Reference
 
-| Service        | CT               | Port              | Accessed By           |
-| -------------- | ---------------- | ----------------- | --------------------- |
-| PostgreSQL     | silo-db (100)    | 5432              | API, TC-1, TC-2       |
-| Redis          | silo-db (100)    | 6379              | API, TC-1, TC-2       |
-| MinIO S3 API   | silo-minio (104) | 9000              | API                   |
-| MinIO Console  | silo-minio (104) | 9001              | Your browser          |
-| Silo API + Web | silo-api (101)   | 8090, 8096, 13378 | Browsers, client apps |
-| Transcode API  | silo-tc-1 (102)  | 8080              | API server            |
-| Transcode API  | silo-tc-2 (103)  | 8080              | API server            |
+| Service        | CT               | Port            | Accessed By           |
+| -------------- | ---------------- | --------------- | --------------------- |
+| PostgreSQL     | silo-db (102)    | 5432            | API, TC-1, TC-2       |
+| Redis          | silo-db (102)    | 6379            | API, TC-1, TC-2       |
+| MinIO S3 API   | silo-minio (101) | 9000            | API                   |
+| MinIO Console  | silo-minio (101) | 9001            | Your browser          |
+| Silo API + Web | silo-api (100)   | 80, 8096, 13378 | Browsers, client apps |
+| Transcode API  | silo-tc-1 (103)  | 8080            | API server            |
+| Transcode API  | silo-tc-2 (104)  | 8080            | API server            |
 
 ---
 
@@ -551,7 +554,7 @@ Do exactly the same on CT 103, but set `NODE_NAME: tc-2` in the compose file.
 # On the API CT: pull latest code and rebuild
 cd /opt/silo
 git pull origin feat/strm-playback      # or your branch
-docker compose -f docker-compose.dev.yml build silo --no-cache
+docker compose -f docker-compose-proxmox.yml build silo --no-cache
 docker compose up -d
 ```
 
