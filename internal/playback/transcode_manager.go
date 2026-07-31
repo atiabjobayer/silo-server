@@ -198,6 +198,23 @@ func (m *TranscodeManager) SwapTranscodeSession(sessionID string, successor *Tra
 	return predecessor
 }
 
+// SwapTranscodeSessionIf publishes successor only while the live map still
+// contains expected. Callers use it after staging a process in a distinct
+// output directory so a stale replacement cannot overwrite a newer process.
+func (m *TranscodeManager) SwapTranscodeSessionIf(
+	sessionID string,
+	expected *TranscodeSession,
+	successor *TranscodeSession,
+) bool {
+	m.transcodeMu.Lock()
+	defer m.transcodeMu.Unlock()
+	if m.transcodes[sessionID] != expected {
+		return false
+	}
+	m.transcodes[sessionID] = successor
+	return true
+}
+
 // StopRemoteTranscode removes only the remote node process. It deliberately
 // leaves the local live-map entry untouched for an atomic remote-to-local v3
 // replacement.
@@ -246,12 +263,33 @@ func (m *TranscodeManager) LockSessionLifecycle(sessionID string) func() {
 // replaced it, the stale handle is not re-spawned and ErrSessionSuperseded is
 // returned.
 func (m *TranscodeManager) RestartSessionLocked(ctx context.Context, sessionID string, ts *TranscodeSession, seekSeconds float64, startSegment int) error {
+	return m.restartSessionLocked(sessionID, ts, func() error {
+		return ts.Restart(ctx, seekSeconds, startSegment)
+	})
+}
+
+func (m *TranscodeManager) restartSessionLocked(sessionID string, ts *TranscodeSession, restart func() error) error {
 	unlock := m.LockSessionLifecycle(sessionID)
 	defer unlock()
 	if live := m.GetTranscodeSession(sessionID); live != ts {
 		return ErrSessionSuperseded
 	}
-	return ts.Restart(ctx, seekSeconds, startSegment)
+	return restart()
+}
+
+// RestartSessionLockedWithCopySeekAnchor is RestartSessionLocked with the
+// resolved keyframe origin for a legacy copy-video seek restart.
+func (m *TranscodeManager) RestartSessionLockedWithCopySeekAnchor(
+	ctx context.Context,
+	sessionID string,
+	ts *TranscodeSession,
+	seekSeconds float64,
+	startSegment int,
+	streamOriginSeconds float64,
+) error {
+	return m.restartSessionLocked(sessionID, ts, func() error {
+		return ts.RestartWithCopySeekAnchor(ctx, seekSeconds, startSegment, streamOriginSeconds)
+	})
 }
 
 // markReconstructing records that sessionID's ffmpeg is mid-reconstruct and
@@ -384,6 +422,12 @@ func (m *TranscodeManager) ReconstructSession(ctx context.Context, sessionID str
 		TargetAudioCodec:     card.TargetCodecAudio,
 		TargetBitrateKbps:    card.TargetBitrateKbps,
 		TranscodeHWAccel:     card.HWAccel,
+		// Client metadata survives the restart so the admin views keep the
+		// client label and Jellyfin identification for the session's lifetime.
+		ClientName:       normalizeClientMetadataValue(card.ClientName, 128),
+		ClientVersion:    normalizeClientMetadataValue(card.ClientVersion, 64),
+		ClientUserAgent:  normalizeClientMetadataValue(card.ClientUserAgent, 512),
+		IsJellyfinCompat: card.IsJellyfinCompat,
 		// Preserve the byte-affecting recipe so an audio switch after a restart
 		// rebuilds the same stream (subtitles/cadence) instead of dropping them.
 		SubtitleTrackIndex: card.SubtitleTrackIndex,

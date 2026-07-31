@@ -92,6 +92,13 @@ describe("AdminSidebar", () => {
     expect(markup).toContain(">Sections<");
   });
 
+  it("includes Diagnostics next to the operational overview links", () => {
+    const markup = renderSidebar();
+
+    expect(markup).toContain('href="/admin/diagnostics"');
+    expect(markup).toContain(">Diagnostics<");
+  });
+
   it("includes a Maintenance link in the system navigation", () => {
     const markup = renderSidebar();
 

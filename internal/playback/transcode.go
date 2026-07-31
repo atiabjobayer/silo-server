@@ -38,16 +38,24 @@ type TranscodeOpts struct {
 	SourceVideoCodec     string
 	VideoBitstreamFilter string // validated copy-mode BSF, e.g. dovi_rpu=strip=1
 	SeekSeconds          float64
-	TargetResolution     string // e.g., 1080p, 720p
-	TargetCodecVideo     string // e.g., h264 (or hevc if allowed)
-	TargetCodecAudio     string // e.g., aac
-	SegmentDuration      int    // seconds, default 6
-	StartSegmentNumber   int    // -hls_segment_start_number, default 0
-	FFmpegPath           string // optional explicit ffmpeg binary path
-	HWAccel              string // auto, qsv, vaapi, nvenc, none
-	HWDevice             string // e.g., /dev/dri/renderD128 (default if empty)
-	SubtitleTrackIndex   int    // -1 = no subtitles
-	SubtitleBurnIn       bool
+	// StreamOriginSeconds is the keyframe timestamp at which a copy-video
+	// stream actually begins. SeekSeconds remains the client-requested -ss so
+	// FFmpeg performs exactly one demuxer seek; this origin keeps response and
+	// reconstruction timelines aligned with the resulting media pre-roll.
+	StreamOriginSeconds float64
+	// CopySeekAnchorResolved distinguishes a valid zero-second origin from
+	// older/shared recipes that never resolved a copy seek anchor.
+	CopySeekAnchorResolved bool
+	TargetResolution       string // e.g., 1080p, 720p
+	TargetCodecVideo       string // e.g., h264 (or hevc if allowed)
+	TargetCodecAudio       string // e.g., aac
+	SegmentDuration        int    // seconds, default 6
+	StartSegmentNumber     int    // -hls_segment_start_number, default 0
+	FFmpegPath             string // optional explicit ffmpeg binary path
+	HWAccel                string // auto, qsv, vaapi, nvenc, none
+	HWDevice               string // e.g., /dev/dri/renderD128 (default if empty)
+	SubtitleTrackIndex     int    // -1 = no subtitles
+	SubtitleBurnIn         bool
 	// SubtitleCodec is the probed codec of the burn-in track (e.g. "subrip",
 	// "hdmv_pgs_subtitle"). Bitmap codecs (PGS/DVD/DVB) select the overlay
 	// filter_complex pipeline; text codecs use the libass subtitles filter.
@@ -693,13 +701,25 @@ func appendVideoFilterArgs(args []string, opts TranscodeOpts) []string {
 	return args
 }
 
+// TranscodesAudio reports whether a transcode with the given target audio
+// codec re-encodes the audio stream. Only an explicit "copy" passes audio
+// through; an empty codec runs ffmpeg's AAC default (see appendAudioArgs), so
+// every consumer of the session's audio decision — live stream state, recipe
+// cards, and the compat mirror — must share this predicate or the activity
+// bucket flips between remux and audio across restarts.
+func TranscodesAudio(targetCodecAudio string) bool {
+	return !strings.EqualFold(targetCodecAudio, "copy")
+}
+
 // appendAudioArgs adds audio codec arguments. Supports "copy" for passthrough,
 // plus opus / aac / eac3 / ac3 as re-encode targets. EAC3 and AC3 are useful
 // when we must transcode video but want to preserve surround channels for an
 // HDMI receiver — both are legal in HLS fMP4 (not MPEG-TS; ensure the HLS
 // packager is fMP4 when emitting these).
 func appendAudioArgs(args []string, opts TranscodeOpts) []string {
-	codec := opts.TargetCodecAudio
+	// Case-insensitive so the switch agrees with TranscodesAudio for any
+	// client-supplied spelling.
+	codec := strings.ToLower(opts.TargetCodecAudio)
 	if codec == "" {
 		codec = "aac"
 	}
@@ -732,7 +752,7 @@ func appendAudioArgs(args []string, opts TranscodeOpts) []string {
 
 // appendBitmapSubtitleBurnInArgs adds burn-in arguments for BITMAP subtitle
 // codecs (PGS/VOBSUB/DVB). libass's subtitles= filter cannot render bitmap
-// tracks, so the decoded subtitle stream is composited onto the video with
+// tracks, so the decoded subtitle stream is composited onto the video with an
 // overlay in a -filter_complex graph (the "Plex route"). The graph's output
 // pad [vout] replaces the raw video stream in stream mapping (see
 // appendStreamSelectionArgs), so -vf must never be emitted alongside this.
@@ -743,32 +763,49 @@ func appendAudioArgs(args []string, opts TranscodeOpts) []string {
 // eof_action=pass keeps the video flowing untouched once the subtitle stream
 // ends instead of freezing the last overlay frame on screen.
 //
-// Hardware pipelines mirror appendSubtitleBurnInArgs: frames are downloaded
-// to CPU memory for the overlay, then re-uploaded for the hardware encoder.
+// QSV/VAAPI composite ON the GPU via overlay_vaapi: the decoded video never
+// leaves its VAAPI surface, and only the small, low-frequency subtitle bitmap is
+// uploaded. This avoids the full-frame GPU→CPU→GPU roundtrip a software overlay
+// forces — that roundtrip runs below realtime on 1080p sources (~0.7x), starving
+// the client, and can crash the QSV buffer path with SIGBUS. See
+// appendSubtitleBurnInArgs for the TEXT path, which must stay on CPU because
+// libass is a software renderer. NVENC and CPU encodes keep the software overlay:
+// overlay_cuda is unverified on this build, so the CUDA path retains the safe
+// (if slower) roundtrip rather than risk a broken graph.
 func appendBitmapSubtitleBurnInArgs(args []string, opts TranscodeOpts) []string {
 	// [0:s:N] indexes subtitle streams only, matching the si=N semantics of
 	// the text path — SubtitleTrackIndex is the embedded subtitle ordinal.
-	cpuFilters := fmt.Sprintf("[0:s:%d]overlay=eof_action=pass", opts.SubtitleTrackIndex)
-	if scale := resolutionToScale(opts.TargetResolution); scale != "" {
-		cpuFilters += "," + scale
-	}
+	subInput := fmt.Sprintf("[0:s:%d]", opts.SubtitleTrackIndex)
 
 	var graph string
 	switch opts.HWAccel {
 	case "qsv":
-		// VAAPI→QSV pipeline: download decoded frames to CPU, overlay, convert
-		// to nv12, upload back to VAAPI, then map to QSV for the encoder.
-		graph = "[0:v:0]hwdownload,format=yuv420p[vmain];[vmain]" + cpuFilters +
-			",format=nv12,hwupload,hwmap=derive_device=qsv,format=qsv[vout]"
+		// GPU composite: upload only the subtitle bitmap, overlay it onto the
+		// VAAPI video surface, scale, then map to QSV for the encoder. The scale
+		// helper already appends the hwmap=derive_device=qsv tail.
+		graph = subInput + "format=bgra,hwupload[sub];" +
+			"[0:v:0][sub]overlay_vaapi=eof_action=pass," + qsvScaleFilter(opts.TargetResolution) + "[vout]"
 	case "vaapi":
-		graph = "[0:v:0]hwdownload,format=yuv420p[vmain];[vmain]" + cpuFilters +
-			",format=nv12,hwupload[vout]"
-	case "nvenc":
-		graph = "[0:v:0]hwdownload,format=yuv420p[vmain];[vmain]" + cpuFilters +
-			",format=nv12,hwupload_cuda[vout]"
+		// GPU composite: same as QSV but the frames stay on VAAPI through the
+		// encoder, so no cross-device map is needed.
+		graph = subInput + "format=bgra,hwupload[sub];" +
+			"[0:v:0][sub]overlay_vaapi=eof_action=pass," + vaapiScaleFilter(opts.TargetResolution) + "[vout]"
 	default:
-		// CPU encoding: overlay directly on decoded frames.
-		graph = "[0:v:0]" + cpuFilters + "[vout]"
+		// NVENC and CPU: software overlay on CPU frames. Build the overlay
+		// fragment (subtitle input + optional post-scale) once, then wire it into
+		// the encode-specific pipeline.
+		cpuFilters := subInput + "overlay=eof_action=pass"
+		if scale := resolutionToScale(opts.TargetResolution); scale != "" {
+			cpuFilters += "," + scale
+		}
+		if opts.HWAccel == "nvenc" {
+			// Download to CPU for the overlay, then re-upload to CUDA.
+			graph = "[0:v:0]hwdownload,format=yuv420p[vmain];[vmain]" + cpuFilters +
+				",format=nv12,hwupload_cuda[vout]"
+		} else {
+			// CPU encoding: overlay directly on decoded frames.
+			graph = "[0:v:0]" + cpuFilters + "[vout]"
+		}
 	}
 
 	return append(args, "-filter_complex", graph)
@@ -1562,6 +1599,28 @@ func (s *TranscodeSession) cleanStaleSegments(startSegment int) {
 // copy-mode sessions, stale segments at or after the restart point are
 // cleaned to prevent serving data from the wrong timeline position.
 func (s *TranscodeSession) Restart(ctx context.Context, seekSeconds float64, startSegment int) error {
+	return s.restart(ctx, seekSeconds, startSegment, 0, false)
+}
+
+// RestartWithCopySeekAnchor restarts a copy-video stream with the keyframe
+// origin resolved for this specific seek. Keeping this metadata explicit
+// prevents a prior seek's origin from being reused after an audio switch.
+func (s *TranscodeSession) RestartWithCopySeekAnchor(
+	ctx context.Context,
+	seekSeconds float64,
+	startSegment int,
+	streamOriginSeconds float64,
+) error {
+	return s.restart(ctx, seekSeconds, startSegment, streamOriginSeconds, true)
+}
+
+func (s *TranscodeSession) restart(
+	ctx context.Context,
+	seekSeconds float64,
+	startSegment int,
+	streamOriginSeconds float64,
+	copySeekAnchorResolved bool,
+) error {
 	s.mu.Lock()
 	// Single-flight: a second caller arriving while a restart is in
 	// progress must not kill the process the first restart just started.
@@ -1603,6 +1662,14 @@ func (s *TranscodeSession) Restart(ctx context.Context, seekSeconds float64, sta
 
 	opts.SeekSeconds = seekSeconds
 	opts.StartSegmentNumber = startSegment
+	if strings.EqualFold(opts.TargetCodecVideo, "copy") {
+		// A seek restart describes a new emitted timeline. Never retain the
+		// previous copy seek's keyframe origin when the caller has not resolved
+		// a replacement; falling back to SeekSeconds is conservative and matches
+		// the behavior of recipes created before copy anchors were introduced.
+		opts.StreamOriginSeconds = streamOriginSeconds
+		opts.CopySeekAnchorResolved = copySeekAnchorResolved
+	}
 	opts.FastStart = false // seek-restarts use veryfast for better quality
 
 	args := buildFFmpegArgs(opts)
@@ -1900,6 +1967,9 @@ func (s *TranscodeSession) SegmentStartTime(segNum int) (float64, bool, error) {
 	s.mu.Lock()
 	manifestPath := filepath.Join(s.outputDir, "stream.m3u8")
 	baseSeekSeconds := s.opts.SeekSeconds
+	if strings.EqualFold(s.opts.TargetCodecVideo, "copy") && s.opts.CopySeekAnchorResolved {
+		baseSeekSeconds = s.opts.StreamOriginSeconds
+	}
 	s.mu.Unlock()
 
 	manifest, err := os.ReadFile(manifestPath)

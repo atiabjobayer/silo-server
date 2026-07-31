@@ -22,6 +22,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
@@ -35,6 +36,10 @@ const (
 	URLAuthPublic          = "public"           // unsigned public URLs via custom domain
 	URLAuthCloudflareToken = "cloudflare_token" // Cloudflare WAF token authentication
 )
+
+// streamUploadPartSize bounds per-upload memory for unsized streaming uploads.
+// S3-compatible backends require parts of at least 5 MiB (except the last).
+const streamUploadPartSize = 8 * 1024 * 1024
 
 // BucketConfig holds the configuration for connecting to a single S3 bucket.
 // Each bucket may have different credentials and endpoints, allowing per-bucket
@@ -151,6 +156,24 @@ func (c *Client) GetObject(ctx context.Context, bucket, key string) ([]byte, err
 	return data, nil
 }
 
+// GetObjectStream fetches the object at the given key and returns a streaming
+// body. The caller must close the returned ReadCloser.
+func (c *Client) GetObjectStream(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
+	objectKey := c.prefixedKey(key)
+	out, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(objectKey),
+	})
+	if err != nil {
+		if isNotFoundErr(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("s3 GetObject %s/%s: %w", bucket, key, err)
+	}
+
+	return out.Body, nil
+}
+
 // PutObject uploads data to the given key, inferring Content-Type from the
 // file extension so that CDNs and browsers serve files with the correct MIME type.
 func (c *Client) PutObject(ctx context.Context, bucket, key string, data []byte) error {
@@ -172,6 +195,37 @@ func (c *Client) PutObject(ctx context.Context, bucket, key string, data []byte)
 	_, err := c.s3Client.PutObject(ctx, input)
 	if err != nil {
 		return fmt.Errorf("s3 PutObject %s/%s: %w", bucket, key, err)
+	}
+
+	return nil
+}
+
+// PutObjectStream uploads a streaming body to the given key. When contentType is
+// empty, it falls back to the same extension-based inference used by PutObject.
+// The body length is untrusted until streamed, so the upload goes through the
+// SDK's multipart manager: it buffers fixed-size parts and sends each with a
+// known Content-Length, which backends like Cloudflare R2 require (a plain
+// PutObject with an unsized stream is rejected with 411 MissingContentLength).
+func (c *Client) PutObjectStream(ctx context.Context, bucket, key string, r io.Reader, contentType string) error {
+	objectKey := c.prefixedKey(key)
+
+	input := &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(objectKey),
+		Body:   r,
+	}
+	if contentType != "" {
+		input.ContentType = aws.String(contentType)
+	} else if ct := contentTypeFromKey(key); ct != "" {
+		input.ContentType = aws.String(ct)
+	}
+
+	uploader := manager.NewUploader(c.s3Client, func(u *manager.Uploader) {
+		u.PartSize = streamUploadPartSize
+		u.Concurrency = 1
+	})
+	if _, err := uploader.Upload(ctx, input); err != nil {
+		return fmt.Errorf("s3 PutObject stream %s/%s: %w", bucket, key, err)
 	}
 
 	return nil

@@ -1,5 +1,6 @@
 import type { ApiError, RefreshResponse } from "./types";
 import { storage } from "../utils/storage";
+import { randomUUID } from "../lib/uuid";
 
 type ProfileUnverifiedListener = () => void;
 let profileUnverifiedListener: ProfileUnverifiedListener | null = null;
@@ -82,25 +83,14 @@ export function getProfileToken(): string | null {
   return profileToken;
 }
 
-function getOrCreateDeviceId(): string | null {
+function getOrCreateDeviceId(): string {
   const existing = storage.get(storage.KEYS.DEVICE_ID);
   if (existing) {
     return existing;
   }
 
-  let nextId: string | null = null;
-  try {
-    nextId =
-      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  } catch {
-    nextId = `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  }
-
-  if (nextId) {
-    storage.set(storage.KEYS.DEVICE_ID, nextId);
-  }
+  const nextId = randomUUID();
+  storage.set(storage.KEYS.DEVICE_ID, nextId);
   return nextId;
 }
 
@@ -137,10 +127,6 @@ function detectDeviceName(): string {
 
 function getDeviceHeaders(): Record<string, string> {
   const deviceId = getOrCreateDeviceId();
-  if (!deviceId) {
-    return {};
-  }
-
   return {
     "X-Silo-Device-Id": deviceId,
     "X-Silo-Device-Name": detectDeviceName(),
@@ -341,6 +327,21 @@ export async function restoreUserSession<TUser>({
 }
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const res = await apiResponse(path, options);
+
+  // Handle empty successful responses.
+  if (res.status === 204 || res.status === 205) {
+    return undefined as T;
+  }
+  const text = await res.text();
+  if (text.trim() === "") {
+    return undefined as T;
+  }
+  return JSON.parse(text) as T;
+}
+
+/** Performs an authenticated API request while leaving the successful body unread. */
+export async function apiResponse(path: string, options: RequestInit = {}): Promise<Response> {
   const headers = buildApiHeaders(options);
 
   let res = await fetch(`/api/v1${path}`, { ...options, headers });
@@ -354,8 +355,8 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     }
     const refreshed = await refreshPromise;
     if (refreshed) {
-      headers["Authorization"] = `Bearer ${accessToken}`;
-      res = await fetch(`/api/v1${path}`, { ...options, headers });
+      const refreshedHeaders = buildApiHeaders(options);
+      res = await fetch(`/api/v1${path}`, { ...options, headers: refreshedHeaders });
     }
   }
 
@@ -367,16 +368,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     }
     throw apiClientErrorFrom(res.status, parsed);
   }
-
-  // Handle empty successful responses.
-  if (res.status === 204 || res.status === 205) {
-    return undefined as T;
-  }
-  const text = await res.text();
-  if (text.trim() === "") {
-    return undefined as T;
-  }
-  return JSON.parse(text) as T;
+  return res;
 }
 
 function buildApiHeaders(options: RequestInit = {}): Record<string, string> {
@@ -421,26 +413,7 @@ export async function apiDownload(
   filename: string,
   options: RequestInit = {},
 ): Promise<void> {
-  let headers = buildApiHeaders(options);
-  let res = await fetch(`/api/v1${path}`, { ...options, headers });
-
-  if (res.status === 401 && getRefreshToken()) {
-    if (!refreshPromise) {
-      refreshPromise = attemptRefresh().finally(() => {
-        refreshPromise = null;
-      });
-    }
-    const refreshed = await refreshPromise;
-    if (refreshed) {
-      headers = buildApiHeaders(options);
-      headers["Authorization"] = `Bearer ${accessToken}`;
-      res = await fetch(`/api/v1${path}`, { ...options, headers });
-    }
-  }
-
-  if (!res.ok) {
-    throw apiClientErrorFrom(res.status, await parseApiError(res));
-  }
+  const res = await apiResponse(path, options);
 
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -458,26 +431,7 @@ export async function apiDownload(
 export const API_BLOB_MAX_BYTES = 512 * 1024 * 1024;
 
 export async function apiBlob(path: string, options: RequestInit = {}): Promise<Blob> {
-  let headers = buildApiHeaders(options);
-  let res = await fetch(`/api/v1${path}`, { ...options, headers });
-
-  if (res.status === 401 && getRefreshToken()) {
-    if (!refreshPromise) {
-      refreshPromise = attemptRefresh().finally(() => {
-        refreshPromise = null;
-      });
-    }
-    const refreshed = await refreshPromise;
-    if (refreshed) {
-      headers = buildApiHeaders(options);
-      headers["Authorization"] = `Bearer ${accessToken}`;
-      res = await fetch(`/api/v1${path}`, { ...options, headers });
-    }
-  }
-
-  if (!res.ok) {
-    throw apiClientErrorFrom(res.status, await parseApiError(res));
-  }
+  const res = await apiResponse(path, options);
 
   // Reject oversized bodies up front instead of crashing the tab while
   // buffering them. When the header is absent, proceed; streaming byte counts

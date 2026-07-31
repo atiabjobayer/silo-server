@@ -79,6 +79,7 @@ export interface PlayerVideoTrack {
   frame_rate?: string;
   bitrate?: number;
   video_range?: string;
+  color_range?: string;
   color_primaries?: string;
   color_space?: string;
   color_transfer?: string;
@@ -210,7 +211,20 @@ export interface ChangeAudioResponse {
   play_method: PlayMethod;
   stream_url: string;
   switch_mode: "reload";
+  player_start_seconds?: number;
+  stream_origin_seconds?: number;
+  timeline_offset_seconds?: number;
+  can_seek_anywhere?: boolean;
   playback_info?: PlaybackSessionPlaybackInfo;
+}
+
+/** A server-prepared stream replacement that the player should adopt without restarting it. */
+export interface PlaybackTransportRestart {
+  revision: number;
+  streamUrl: string;
+  playerStartSeconds: number;
+  streamOriginSeconds: number;
+  canSeekAnywhere: boolean;
 }
 
 /** Client codec capabilities sent to the server. */

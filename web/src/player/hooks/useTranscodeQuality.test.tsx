@@ -28,7 +28,7 @@ function wrapper({ children }: { children: ReactNode }) {
   return <PlayerConfigProvider config={config}>{children}</PlayerConfigProvider>;
 }
 
-function transcodeStartResponse() {
+function transcodeStartResponse(overrides: Record<string, unknown> = {}) {
   return {
     ok: true,
     status: 200,
@@ -40,6 +40,7 @@ function transcodeStartResponse() {
       player_start_seconds: 0,
       timeline_offset_seconds: 0,
       can_seek_anywhere: true,
+      ...overrides,
     }),
   };
 }
@@ -75,6 +76,70 @@ function renderQuality() {
 }
 
 describe("useTranscodeQuality", () => {
+  it("adopts an audio-switch transport without starting another transcode", async () => {
+    const { result } = renderHook(
+      () =>
+        useTranscodeQuality({
+          sessionId: "sess-1",
+          selectedVersion: version,
+          versions: [version],
+          playMethod: "remux",
+          initialPosition: 100,
+          transportRestart: {
+            revision: 1,
+            streamUrl: "/api/v1/playback/transcode/sess-1/master.m3u8?st=token",
+            playerStartSeconds: 4,
+            streamOriginSeconds: 96,
+            canSeekAnywhere: false,
+          },
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() =>
+      expect(result.current.transcodeStreamUrl).toContain("master.m3u8?st=token"),
+    );
+    expect(result.current.playerStartSeconds).toBe(4);
+    expect(result.current.streamOriginSeconds).toBe(96);
+    expect(result.current.canSeekAnywhere).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves video copy when auto-starting a resumed remux", async () => {
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve(
+        transcodeStartResponse({
+          player_start_seconds: 2.261,
+          stream_origin_seconds: 16,
+          timeline_offset_seconds: 16,
+          can_seek_anywhere: false,
+        }),
+      ),
+    );
+    const { result } = renderHook(
+      () =>
+        useTranscodeQuality({
+          sessionId: "sess-1",
+          selectedVersion: version,
+          versions: [version],
+          playMethod: "remux",
+          initialPosition: 478.25,
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const body = sentBodies()[0]!;
+    expect(body.seek_seconds).toBe(478.25);
+    expect(body.target_codec_video).toBe("copy");
+    expect(body.target_resolution).toBe("");
+    expect(body.target_bitrate_kbps).toBe(0);
+    await waitFor(() => expect(result.current.streamOriginSeconds).toBe(16));
+    expect(result.current.playerStartSeconds).toBe(2.261);
+    expect(result.current.canSeekAnywhere).toBe(false);
+  });
+
   it("coalesces same-tick restarts into a single start with the final params", async () => {
     const { result } = renderQuality();
 
@@ -148,6 +213,34 @@ describe("useTranscodeQuality", () => {
 
     await new Promise((r) => setTimeout(r, 20));
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels an in-flight startup before a manifest arrives", async () => {
+    let requestSignal: AbortSignal | undefined;
+    fetchMock.mockImplementationOnce((_, init: RequestInit) => {
+      requestSignal = init.signal as AbortSignal;
+      return new Promise((_, reject) => {
+        requestSignal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("Aborted", "AbortError")),
+          { once: true },
+        );
+      });
+    });
+
+    const { result } = renderQuality();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(result.current.startupGeneration).toBe(1);
+    expect(result.current.isTranscoding).toBe(true);
+
+    act(() => {
+      result.current.cancelPendingTranscodeStart();
+    });
+
+    expect(requestSignal?.aborted).toBe(true);
+    await waitFor(() => expect(result.current.isTranscoding).toBe(false));
+    expect(result.current.error).toBeNull();
   });
 
   it("rolls back a failed burn-in selection so the same track can be retried", async () => {

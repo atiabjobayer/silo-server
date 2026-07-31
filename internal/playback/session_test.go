@@ -661,6 +661,79 @@ func TestSetTranscodeNodeURL_NotFound(t *testing.T) {
 	}
 }
 
+func TestSetTranscodeRoutePublishesNodeAndTransportTogether(t *testing.T) {
+	mgr := playback.NewSessionManager(0, 0)
+	session, err := mgr.StartSession(1, "profile-1", 42, playback.PlayRemux, true)
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+
+	if err := mgr.SetTranscodeRoute(session.ID, playback.TranscodeRoute{NodeURL: "http://node:8070", TransportID: session.ID + "-legacy-next"}); err != nil {
+		t.Fatalf("SetTranscodeRoute: %v", err)
+	}
+	got, err := mgr.GetSession(session.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.TranscodeNodeURL != "http://node:8070" || got.TranscodeTransportID != session.ID+"-legacy-next" {
+		t.Fatalf("transcode route = %q/%q", got.TranscodeNodeURL, got.TranscodeTransportID)
+	}
+}
+
+func TestApplyReplacementIfRouteRejectsStalePredecessor(t *testing.T) {
+	mgr := playback.NewSessionManager(0, 0)
+	session, err := mgr.StartSession(1, "profile-1", 42, playback.PlayRemux, true)
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	if err := mgr.SetTranscodeRoute(session.ID, playback.TranscodeRoute{NodeURL: "http://old-node", TransportID: "old-transport"}); err != nil {
+		t.Fatalf("SetTranscodeRoute: %v", err)
+	}
+	replacement := playback.SessionReplacement{
+		EffectiveMediaFileID: 42,
+		StreamState: playback.SessionStreamState{
+			PlayMethod:           playback.PlayTranscode,
+			BasePlayMethod:       playback.PlayRemux,
+			TranscodeAudio:       true,
+			TranscodeRouteSet:    true,
+			SubtitleTrackIndex:   -1,
+			TranscodeNodeURL:     "http://new-node",
+			TranscodeTransportID: "new-transport",
+		},
+	}
+
+	_, published, err := mgr.ApplyReplacementIfRoute(
+		session.ID,
+		playback.TranscodeRoute{NodeURL: "http://stale-node", TransportID: "stale-transport"},
+		replacement,
+	)
+	if err != nil {
+		t.Fatalf("ApplyReplacementIfRoute stale: %v", err)
+	}
+	if published {
+		t.Fatal("stale predecessor unexpectedly published a replacement")
+	}
+
+	_, published, err = mgr.ApplyReplacementIfRoute(
+		session.ID,
+		playback.TranscodeRoute{NodeURL: "http://old-node", TransportID: "old-transport"},
+		replacement,
+	)
+	if err != nil {
+		t.Fatalf("ApplyReplacementIfRoute current: %v", err)
+	}
+	if !published {
+		t.Fatal("current predecessor did not publish its replacement")
+	}
+	got, err := mgr.GetSession(session.ID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.TranscodeNodeURL != "http://new-node" || got.TranscodeTransportID != "new-transport" {
+		t.Fatalf("transcode route = %q/%q", got.TranscodeNodeURL, got.TranscodeTransportID)
+	}
+}
+
 func TestSetEffectiveMediaFileID(t *testing.T) {
 	mgr := playback.NewSessionManager(0, 0)
 	session, err := mgr.StartSession(1, "profile-1", 100, playback.PlayDirect, false)

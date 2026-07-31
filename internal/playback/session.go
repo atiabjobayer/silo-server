@@ -27,6 +27,7 @@ type Session struct {
 	ClientName           string // reported playback client name, when available
 	ClientVersion        string // reported playback client version, when available
 	ClientUserAgent      string // trimmed request user agent for the playback session
+	IsJellyfinCompat     bool   // immutable origin identity for Jellyfin compatibility sessions
 
 	TranscodeNodeURL     string // URL of assigned transcode node (empty = local/integrated)
 	TranscodeTransportID string // remote node process identity; empty means session ID
@@ -93,6 +94,14 @@ type SessionStreamState struct {
 	SegmentDuration    int
 }
 
+// TranscodeRoute identifies the process serving a playback session. An empty
+// NodeURL means the integrated server owns the process; an empty TransportID
+// means a remote process uses the public playback session ID.
+type TranscodeRoute struct {
+	NodeURL     string
+	TransportID string
+}
+
 // SessionReplacement is the complete mutable session state associated with a
 // protocol-v3 replacement plan. Position is optional because ordinary failure
 // recovery must preserve the player's latest progress while seek recovery
@@ -132,6 +141,7 @@ type ClientInfo struct {
 	Name      string
 	Version   string
 	UserAgent string
+	IsCompat  bool
 }
 
 // WithClientInfo stores playback client metadata on a context.
@@ -429,6 +439,7 @@ func newSession(
 		ClientName:           normalizeClientMetadataValue(clientInfo.Name, 128),
 		ClientVersion:        normalizeClientMetadataValue(clientInfo.Version, 64),
 		ClientUserAgent:      normalizeClientMetadataValue(clientInfo.UserAgent, 512),
+		IsJellyfinCompat:     clientInfo.IsCompat,
 		StartedAt:            now,
 		UpdatedAt:            now,
 		LastActivityAt:       now,
@@ -834,6 +845,36 @@ func (m *SessionManager) ApplyReplacement(sessionID string, replacement SessionR
 	if !ok {
 		return SessionReplacementRollback{}, ErrSessionNotFound
 	}
+	return m.applyReplacementLocked(s, sessionID, replacement)
+}
+
+// ApplyReplacementIfRoute applies a complete replacement only while the
+// session still routes to expected. It publishes route and stream state in one
+// critical section so callers never expose a successor with predecessor state.
+func (m *SessionManager) ApplyReplacementIfRoute(
+	sessionID string,
+	expected TranscodeRoute,
+	replacement SessionReplacement,
+) (SessionReplacementRollback, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, ok := m.sessions[sessionID]
+	if !ok {
+		return SessionReplacementRollback{}, false, ErrSessionNotFound
+	}
+	if s.TranscodeNodeURL != expected.NodeURL || s.TranscodeTransportID != expected.TransportID {
+		return SessionReplacementRollback{}, false, nil
+	}
+	rollback, err := m.applyReplacementLocked(s, sessionID, replacement)
+	return rollback, err == nil, err
+}
+
+func (m *SessionManager) applyReplacementLocked(
+	s *Session,
+	sessionID string,
+	replacement SessionReplacement,
+) (SessionReplacementRollback, error) {
 	if replacement.EffectiveMediaFileID <= 0 {
 		return SessionReplacementRollback{}, errors.New("replacement effective media file id is invalid")
 	}
@@ -889,6 +930,27 @@ func (m *SessionManager) RollbackReplacement(sessionID string, rollback SessionR
 	return nil
 }
 
+// SetTranscodeStreamDetails records the actual encode decisions of a running
+// transcode on the session — video copy vs re-encode, and whether audio is
+// re-encoded — so session sync and the admin activity views classify the
+// stream by what ffmpeg is doing rather than by the transport method alone
+// (an HLS session with copied video is a repackage, not a video transcode).
+func (m *SessionManager) SetTranscodeStreamDetails(sessionID, targetVideoCodec, targetAudioCodec string, transcodeAudio bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, ok := m.sessions[sessionID]
+	if !ok {
+		return ErrSessionNotFound
+	}
+
+	s.TargetVideoCodec = targetVideoCodec
+	s.TargetAudioCodec = targetAudioCodec
+	s.TranscodeAudio = transcodeAudio
+	m.touchSessionLocked(s)
+	return nil
+}
+
 // SetTranscodeNodeURL assigns a transcode node URL to an existing session.
 func (m *SessionManager) SetTranscodeNodeURL(sessionID, url string) error {
 	m.mu.Lock()
@@ -900,6 +962,24 @@ func (m *SessionManager) SetTranscodeNodeURL(sessionID, url string) error {
 	}
 
 	s.TranscodeNodeURL = url
+	s.streamRevision++
+	m.touchSessionLocked(s)
+	return nil
+}
+
+// SetTranscodeRoute atomically assigns the node and process identity used to
+// serve a transcode.
+func (m *SessionManager) SetTranscodeRoute(sessionID string, route TranscodeRoute) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	s, ok := m.sessions[sessionID]
+	if !ok {
+		return ErrSessionNotFound
+	}
+
+	s.TranscodeNodeURL = route.NodeURL
+	s.TranscodeTransportID = route.TransportID
 	s.streamRevision++
 	m.touchSessionLocked(s)
 	return nil

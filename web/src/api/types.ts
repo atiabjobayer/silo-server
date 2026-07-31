@@ -150,6 +150,22 @@ export interface JellyfinCompatOperationStatus {
   error?: string;
 }
 
+/** Account-facing compat connection details from GET /compat/connect-info. */
+export interface CompatConnectInfo {
+  jellyfin: {
+    /** Whether a listener is accepting connections now, not what is configured. */
+    enabled: boolean;
+    /** An admin changed the enabled setting; it applies on the next restart. */
+    pending_restart: boolean;
+    public_url: string;
+    server_name: string;
+  };
+  account: {
+    /** False for SSO/plugin-provisioned accounts, which cannot use compat login. */
+    password_login_available: boolean;
+  };
+}
+
 export interface JellyfinCompatStatus {
   enabled: boolean;
   api_state: "disabled" | "enabled" | "error";
@@ -970,6 +986,7 @@ export interface VersionVideoTrack {
   bitrate?: number;
   video_range?: string;
   video_range_type?: string;
+  color_range?: string;
   color_primaries?: string;
   color_space?: string;
   color_transfer?: string;
@@ -2090,10 +2107,36 @@ export interface AutoscanSourcesResponse {
   sources: AutoscanSource[];
 }
 
+/** Whether a scan source needs upstream credentials to reach its provider. */
+export type AutoscanConnectionRequirement = "none" | "optional" | "required";
+
+/**
+ * The setup contract for one scan source, declared by its plugin manifest and
+ * resolved host-side. The Add-source flow builds its steps from this rather
+ * than branching on plugin ids, so a new plugin configures itself.
+ *
+ * The host always populates this, substituting defaults (poll + optional
+ * connection) for capabilities that declare nothing.
+ */
+export interface AutoscanScanSourceDescriptor {
+  delivery_modes: AutoscanDeliveryMode[];
+  connection: AutoscanConnectionRequirement;
+  connection_kinds?: string[];
+  /** Plugin already emits Silo-native paths, so path rewrites can be skipped. */
+  emits_native_paths?: boolean;
+  summary?: string;
+  icon_url?: string;
+  /** Per-source config fields, rendered by the shared plugin SchemaForm. */
+  config_form?: PluginAdminForm;
+}
+
 export interface AutoscanAvailableSource {
   plugin_id: string;
   capability_id: string;
   display_name: string;
+  description?: string;
+  /** Optional: an older server omits it, and descriptorFor falls back. */
+  descriptor?: AutoscanScanSourceDescriptor;
 }
 
 export interface AutoscanAvailableSourcesResponse {
@@ -2425,6 +2468,11 @@ export interface AdminSession {
   requested_video_resolution?: string;
   video_decision?: string;
   audio_decision?: string;
+  /** Server-computed activity bucket: direct | remux | transcode | audio.
+   * Absent when the per-stream decisions are unknown. */
+  effective_play_method?: string;
+  /** Server-side identification of Jellyfin-ecosystem clients (the JF pill). */
+  is_jellyfin_client?: boolean;
 }
 
 export interface OperationalLogEntry {
@@ -2469,6 +2517,126 @@ export interface AuditLogListResponse {
   next_cursor?: string;
 }
 
+export type DiagnosticAvailabilityStatus = "available" | "disabled" | "storage_unavailable";
+
+export interface DiagnosticStatus {
+  status: DiagnosticAvailabilityStatus;
+  server_instance_id: string;
+  accepted_schema_versions: number[];
+  max_bundle_bytes: number;
+  max_manifest_bytes: number;
+  retention_days: number;
+  consent_notice_version: number;
+}
+
+export type DiagnosticReportState = "receiving" | "ready" | "failed";
+export type DiagnosticReportType =
+  | "crash"
+  | "anr"
+  | "native_crash"
+  | "hang"
+  | "abnormal_exit"
+  | "manual";
+export type DiagnosticPlatform = "android" | "android-tv" | "ios" | "tvos";
+
+export interface ClientDiagnosticManifest {
+  schema_version: number;
+  report: {
+    type: DiagnosticReportType;
+    captured_at: string;
+    capture_session_id: string;
+    app_version: string;
+    app_build: string;
+    platform: DiagnosticPlatform;
+    os_version: string;
+    profile_id?: string;
+    [key: string]: unknown;
+  };
+  destination: {
+    server_instance_id: string;
+    [key: string]: unknown;
+  };
+  consent: {
+    mode: "prompt" | "always" | "manual";
+    notice_version: number;
+    [key: string]: unknown;
+  };
+  crash?: {
+    summary: string;
+    stack_excerpt?: string;
+    thread?: string;
+    foreground?: boolean;
+    source: "ueh" | "exit_info" | "metrickit" | "exit_sentinel";
+    provenance: "pre_failure" | "post_restart" | "metric_reporting_period";
+    occurred_at: string;
+    [key: string]: unknown;
+  };
+  device_summary: {
+    manufacturer: string;
+    model: string;
+    os: string;
+    form_factor: string;
+    [key: string]: unknown;
+  };
+  playback_session_ids: string[];
+  log_summary: {
+    lines: number;
+    bytes_gz: number;
+    dropped_lines: number;
+    categories: string[];
+    debug_logging: boolean;
+    [key: string]: unknown;
+  };
+  archive: {
+    entries: string[];
+    bytes: number;
+    uncompressed_bytes: number;
+    sha256: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+// DiagnosticReportSummary is the shape returned by the admin list endpoint,
+// which omits the full manifest JSONB for cheap paging. `app_build` is projected
+// out of the manifest server-side so rows can still show the build number.
+export interface DiagnosticReportSummary {
+  id: string;
+  short_id: string;
+  user_id: number;
+  profile_id?: string;
+  state: DiagnosticReportState;
+  captured_at: string;
+  received_at: string;
+  report_type: DiagnosticReportType;
+  platform: DiagnosticPlatform;
+  app_version: string;
+  app_build: string;
+  crash_summary?: string;
+  playback_session_ids: string[];
+  blob_bucket?: string;
+  blob_key?: string;
+  blob_bytes?: number;
+  uncompressed_bytes?: number;
+  blob_sha256?: string;
+}
+
+// DiagnosticReport is the full detail shape (GetByID), which additionally
+// includes the parsed manifest for the detail pane.
+export interface DiagnosticReport extends DiagnosticReportSummary {
+  manifest: ClientDiagnosticManifest;
+}
+
+export interface DiagnosticReportListResponse {
+  reports: DiagnosticReportSummary[];
+  next_cursor?: string;
+}
+
+export interface DiagnosticDownloadResponse {
+  download_url: string;
+  expires_at: string;
+}
+
 export type AdminLogStream = "app" | "audit";
 
 export interface AdminLogSnapshotMessage {
@@ -2499,6 +2667,10 @@ export type EventChannel =
   | "scans"
   | "history_import"
   | "user_state"
+  // Per-account settings changed somewhere (another device, or an admin
+  // editing this account). Identity only, never a value — see
+  // useSettingValuesRealtime.
+  | "user_settings"
   | "settings"
   | "notifications";
 
@@ -2912,6 +3084,8 @@ export interface LibraryMetadataMatchQueueStatus {
   series_count: number;
   raw_file_count: number;
   total_count: number;
+  pending_count: number;
+  parked_count: number;
 }
 
 export interface LibraryMovieMatchQueueEntry {
@@ -2923,6 +3097,12 @@ export interface LibraryMovieMatchQueueEntry {
   last_attempted_at?: string;
   attempt_count: number;
   last_error?: string;
+  state: "pending" | "parked";
+  failure_kind?: string;
+  failure_detail?: LibraryMetadataMatchFailureDetail;
+  deterministic_attempt_count: number;
+  matcher_revision: number;
+  parked_at?: string;
   updated_at: string;
 }
 
@@ -2934,7 +3114,32 @@ export interface LibrarySeriesMatchQueueEntry {
   last_attempted_at?: string;
   attempt_count: number;
   last_error?: string;
+  state: "pending" | "parked";
+  failure_kind?: string;
+  failure_detail?: LibraryMetadataMatchFailureDetail;
+  deterministic_attempt_count: number;
+  matcher_revision: number;
+  parked_at?: string;
   updated_at: string;
+}
+
+export interface LibraryMetadataMatchFailureDetail {
+  message?: string;
+  decision?: {
+    outcome: string;
+    candidate_count: number;
+    threshold: number;
+    top_candidates?: Array<{
+      title: string;
+      matched_title?: string;
+      year?: number;
+      score: number;
+      provider_ids?: Record<string, string>;
+      sources?: string[];
+      reasons?: string[];
+    }>;
+  };
+  [key: string]: unknown;
 }
 
 export interface LibraryRawMatchBacklogEntry {
@@ -2950,6 +3155,8 @@ export interface LibraryRawMatchBacklogEntry {
 }
 
 export interface LibraryMetadataMatchQueueDetail extends LibraryMetadataMatchQueueStatus {
+  limit: number;
+  offset: number;
   movies: LibraryMovieMatchQueueEntry[];
   series: LibrarySeriesMatchQueueEntry[];
   raw_files: LibraryRawMatchBacklogEntry[];
@@ -3265,6 +3472,13 @@ export interface PluginAdminFormField {
   show_when?: PluginAdminFormCondition[];
   validation?: PluginAdminFormValidation;
   exclusive_group_field?: string;
+  /**
+   * Names a host-known value this field can be populated from in one click.
+   * Used by autoscan source config so a path field can be filled from Silo's
+   * own library paths without the UI knowing which plugin owns it. Unknown
+   * values render no action.
+   */
+  fill_from?: string;
 }
 
 export interface PluginCapability {
@@ -3297,6 +3511,8 @@ export interface PluginAsset {
 export interface PluginConfigValue {
   key: string;
   value: Record<string, unknown>;
+  /** Secret fields saved on the server but redacted from value. */
+  configured_secrets?: string[];
 }
 
 export interface PluginAuthBinding {
@@ -3427,6 +3643,8 @@ export interface UpdatePluginInstallationRequest {
 export interface SavePluginConfigRequest {
   key: string;
   value: Record<string, unknown>;
+  /** Explicitly clear these manifest-declared secret fields. */
+  clear_secrets?: string[];
 }
 
 export interface SavePluginAuthBindingRequest {
@@ -3523,16 +3741,6 @@ export interface UserLibrary {
   type: string;
   sort_order: number;
   poster_url?: string;
-}
-
-export interface LibraryPlaybackPreference {
-  profile_id: string;
-  library_id: number;
-  audio_language?: string;
-  subtitle_language?: string;
-  subtitle_mode?: string;
-  show_forced_subtitles?: boolean;
-  updated_at?: string;
 }
 
 // Progress entry from GET /progress
@@ -3914,6 +4122,99 @@ export interface TopUpInviteCodeRequest {
   additional_uses: number;
 }
 
+// Emailed invitations
+export type InvitationStatus = "pending" | "accepted" | "expired" | "revoked";
+
+export interface Invitation {
+  id: number;
+  email: string;
+  role: string;
+  access_group_id?: number;
+  library_ids?: number[];
+  create_profile: boolean;
+  show_tour: boolean;
+  note?: string;
+  invited_by: number;
+  invited_by_name?: string;
+  status: InvitationStatus;
+  expires_at: string;
+  accepted_at?: string;
+  accepted_user_id?: number;
+  created_at: string;
+}
+
+export interface CreateInvitationRequest {
+  email: string;
+  role?: string;
+  access_group_id?: number | null;
+  library_ids?: number[] | null;
+  create_profile?: boolean;
+  show_tour?: boolean;
+  note?: string;
+}
+
+export interface SendInvitationResponse {
+  invitation: Invitation;
+  email_sent: boolean;
+  /** Only readable in this response — the server stores just the token hash. */
+  claim_url?: string;
+}
+
+export interface InvitationLookupResponse {
+  email: string;
+  inviter_name?: string;
+  server_name: string;
+  expires_at: string;
+  show_tour: boolean;
+}
+
+// Onboarding tour (server-driven manifest)
+export interface OnboardingSettingOption {
+  value: string;
+  label: string;
+}
+
+export interface OnboardingSettingSpec {
+  target: "profile_field" | "setting" | "device_setting";
+  key: string;
+  control: "segmented" | "toggle" | "select";
+  options?: OnboardingSettingOption[];
+  default?: string;
+  label?: string;
+}
+
+export interface OnboardingStepLink {
+  label: string;
+  url: string;
+}
+
+export interface OnboardingStep {
+  id: string;
+  // Open string: the client renders kinds it knows and skips the rest.
+  kind: string;
+  title?: string;
+  body?: string;
+  illustration?: string;
+  setting?: OnboardingSettingSpec;
+  route?: string;
+  action_label?: string;
+  links?: OnboardingStepLink[];
+}
+
+export interface OnboardingFlow {
+  version: number;
+  tour_id: string;
+  steps: OnboardingStep[];
+}
+
+export interface OnboardingState {
+  tour_id: string;
+  last_step?: string;
+  completed_at?: string;
+  skipped_at?: string;
+  done: boolean;
+}
+
 // API Keys
 export interface AdminAPIKey {
   id: number;
@@ -3970,6 +4271,23 @@ export interface AdminSettingUpdateResponse {
   value?: string;
   /** True when the saved value only takes effect after a server restart. */
   restart_required?: boolean;
+}
+
+/** Response of the atomic PUT /admin/settings endpoint. */
+export interface AdminSettingsUpdateResponse {
+  /** Saved non-sensitive values. Secret values are intentionally omitted. */
+  values: Record<string, string>;
+  restart_required: boolean;
+  restart_required_keys?: string[];
+}
+
+export interface AdminServerStatus {
+  started_at: string;
+  restart_required: boolean;
+  restart_required_at?: string;
+  restart_required_reason?: string;
+  restart_requested: boolean;
+  restart_requested_at?: string;
 }
 
 // IP visibility
@@ -4112,6 +4430,7 @@ export interface SubtitleProviderUpdateRequest {
   api_key?: string;
   username?: string;
   password?: string;
+  clear_credentials?: boolean;
 }
 
 export interface SubtitleProviderTestRequest {
@@ -4214,6 +4533,13 @@ export interface TaskInfo {
 // Match dialog types
 export interface MatchCandidate {
   title: string;
+  original_title?: string;
+  aliases?: Array<{ title: string; language?: string; kind: string; provider?: string }>;
+  title_language?: string;
+  title_is_fallback?: boolean;
+  matched_title?: string;
+  match_score?: number;
+  match_reasons?: string[];
   year: number;
   content_type: string;
   provider_ids: Record<string, string>;

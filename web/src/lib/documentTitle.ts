@@ -37,6 +37,7 @@ const SETTINGS_TITLES: Record<string, string> = {
   "subtitle-appearance": "Subtitle Settings",
   "home-screen": "Home Screen Settings",
   "card-overlays": "Card Overlay Settings",
+  "connect-apps": "Connect Apps Settings",
 };
 
 const ADMIN_TITLES: Record<string, string> = {
@@ -44,6 +45,7 @@ const ADMIN_TITLES: Record<string, string> = {
   "api-keys": "Admin API Keys",
   collections: "Admin Collections",
   devices: "Admin Devices",
+  diagnostics: "Admin Client Diagnostics",
   history: "Admin Playback History",
   "history-import": "Admin History Import",
   "marker-history": "Admin Marker History",
