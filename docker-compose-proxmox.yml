@@ -46,6 +46,7 @@ services:
         COPY cmd/ cmd/
         COPY internal/ internal/
         COPY migrations/ migrations/
+        COPY contracts/ contracts/
         RUN --mount=type=cache,target=/root/.cache/go-build \
             --mount=type=cache,target=/go/pkg/mod \
             go build -o /silo ./cmd/silo/
