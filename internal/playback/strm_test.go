@@ -15,7 +15,7 @@ func TestResolveTranscodeInputPathSTRM(t *testing.T) {
 	if err := os.WriteFile(path, []byte(want+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := resolveTranscodeInputPath(path)
+	got, err := ResolveTranscodeInputPath(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestResolveTranscodeInputPathRejectsInvalidSTRM(t *testing.T) {
 			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := resolveTranscodeInputPath(path); err == nil {
+			if _, err := ResolveTranscodeInputPath(path); err == nil {
 				t.Fatal("expected invalid .strm to be rejected")
 			}
 		})
@@ -45,7 +45,7 @@ func TestResolveTranscodeInputPathRejectsInvalidSTRM(t *testing.T) {
 
 func TestResolveTranscodeInputPathLeavesMediaPathAlone(t *testing.T) {
 	const path = "/media/movie.mkv"
-	got, err := resolveTranscodeInputPath(path)
+	got, err := ResolveTranscodeInputPath(path)
 	if err != nil || got != path {
 		t.Fatalf("resolved input = %q, err = %v", got, err)
 	}

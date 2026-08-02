@@ -2374,10 +2374,20 @@ func (h *PlaybackHandler) HandleChangeAudioTrack(w http.ResponseWriter, r *http.
 	if legacyCopyRestart {
 		restartCopyAnchorResolved = true
 		if req.Position > 0 {
+			resolvedInputPath, resolveErr := playback.ResolveTranscodeInputPath(file.FilePath)
+			if resolveErr != nil {
+				slog.ErrorContext(r.Context(), "failed to resolve input path for audio-switch copy-video seek anchor", "component", "api",
+					"playback_session_id", sessionID,
+					"file_path", file.FilePath,
+					"error", resolveErr,
+				)
+				writeError(w, http.StatusInternalServerError, "remux_seek_anchor_failed", "Failed to resolve input path for remux seek")
+				return
+			}
 			anchor, anchorSegment, anchorErr := h.resolveLegacyCopySeekAnchor(
 				r.Context(),
 				h.playbackConfig().FFmpegPath,
-				file.FilePath,
+				resolvedInputPath,
 				req.Position,
 				restartSegmentDuration,
 			)
@@ -3234,10 +3244,22 @@ func (h *PlaybackHandler) HandleStartTranscode(w http.ResponseWriter, r *http.Re
 	if videoCopy {
 		streamOriginSeconds = req.SeekSeconds
 		if req.SeekSeconds > 0 {
+			// Resolve .strm shortcuts to their remote URLs so ffprobe can
+			// open the actual media stream instead of the text shortcut file.
+			resolvedInputPath, resolveErr := playback.ResolveTranscodeInputPath(file.FilePath)
+			if resolveErr != nil {
+				slog.ErrorContext(r.Context(), "failed to resolve input path for copy-video seek anchor", "component", "api",
+					"playback_session_id", req.SessionID,
+					"file_path", file.FilePath,
+					"error", resolveErr,
+				)
+				writeError(w, http.StatusInternalServerError, "remux_seek_anchor_failed", "Failed to resolve input path for remux seek")
+				return
+			}
 			anchor, anchorSegment, anchorErr := h.resolveLegacyCopySeekAnchor(
 				r.Context(),
 				playbackCfg.FFmpegPath,
-				file.FilePath,
+				resolvedInputPath,
 				req.SeekSeconds,
 				req.SegmentDuration,
 			)

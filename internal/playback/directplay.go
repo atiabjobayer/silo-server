@@ -56,7 +56,7 @@ func MimeFromExtension(name string) string {
 // and Content-Type detection.
 func ServeDirectPlay(w http.ResponseWriter, r *http.Request, filePath string) error {
 	if strings.EqualFold(filepath.Ext(filePath), ".strm") {
-		streamURL, err := resolveTranscodeInputPath(filePath)
+		streamURL, err := ResolveTranscodeInputPath(filePath)
 		if err != nil {
 			http.Error(w, "invalid stream shortcut", http.StatusBadRequest)
 			return err

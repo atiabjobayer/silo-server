@@ -91,7 +91,7 @@ func StreamExtractSubtitle(ctx context.Context, opts StreamExtractOpts) error {
 	// elementary streams, not container shortcuts.
 	inputPath := opts.InputPath
 	if !opts.InputIsExtractedSup {
-		resolved, err := resolveTranscodeInputPath(inputPath)
+		resolved, err := ResolveTranscodeInputPath(inputPath)
 		if err != nil {
 			return fmt.Errorf("resolve subtitle input path: %w", err)
 		}

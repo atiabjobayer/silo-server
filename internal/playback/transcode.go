@@ -163,7 +163,7 @@ const (
 
 // StartTranscode launches an ffmpeg process that produces HLS segments.
 func StartTranscode(ctx context.Context, opts TranscodeOpts) (*TranscodeSession, error) {
-	inputPath, err := resolveTranscodeInputPath(opts.InputPath)
+	inputPath, err := ResolveTranscodeInputPath(opts.InputPath)
 	if err != nil {
 		return nil, err
 	}
@@ -236,11 +236,11 @@ func StartTranscode(ctx context.Context, opts TranscodeOpts) (*TranscodeSession,
 	return s, nil
 }
 
-// resolveTranscodeInputPath turns a Stremio-style .strm shortcut into the
+// ResolveTranscodeInputPath turns a Stremio-style .strm shortcut into the
 // remote media URL FFmpeg must open. Keeping this at the shared launch boundary
 // covers integrated playback, transcode nodes, Jellyfin compatibility, and
 // reconstructed sessions without duplicating resolution logic in each handler.
-func resolveTranscodeInputPath(inputPath string) (string, error) {
+func ResolveTranscodeInputPath(inputPath string) (string, error) {
 	if !strings.EqualFold(filepath.Ext(inputPath), ".strm") {
 		return inputPath, nil
 	}

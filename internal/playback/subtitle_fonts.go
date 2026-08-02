@@ -54,7 +54,7 @@ func ExtractAttachedSubtitleFonts(ctx context.Context, inputPath string, ffmpegP
 	}
 
 	// Resolve .strm shortcuts to their remote URLs.
-	resolved, err := resolveTranscodeInputPath(inputPath)
+	resolved, err := ResolveTranscodeInputPath(inputPath)
 	if err != nil {
 		return nil, fmt.Errorf("subtitle fonts: resolve input path: %w", err)
 	}

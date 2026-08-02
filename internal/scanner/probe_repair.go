@@ -210,6 +210,11 @@ func needsCopySafetyProbe(file *models.MediaFile) bool {
 	if file.VideoTracks[0].MultiplePPS != nil {
 		return false
 	}
+	// .strm shortcut files point to remote streams; a local copy-safety scan
+	// of the text placeholder is meaningless and always fails.
+	if strings.EqualFold(filepath.Ext(file.FilePath), ".strm") {
+		return false
+	}
 	codec := strings.ToLower(strings.TrimSpace(file.VideoTracks[0].Codec))
 	if codec == "" {
 		codec = strings.ToLower(strings.TrimSpace(file.CodecVideo))

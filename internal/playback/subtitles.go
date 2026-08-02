@@ -60,7 +60,7 @@ func IsASS(codec string) bool {
 func ExtractSubtitle(ctx context.Context, filePath string, trackIndex int, ffmpegPath ...string) ([]byte, string, error) {
 	// Resolve .strm shortcuts to their remote URLs so ffmpeg can open the
 	// actual media stream instead of the text shortcut file.
-	resolved, err := resolveTranscodeInputPath(filePath)
+	resolved, err := ResolveTranscodeInputPath(filePath)
 	if err != nil {
 		return nil, "", fmt.Errorf("resolve subtitle input path: %w", err)
 	}
@@ -111,7 +111,7 @@ func ExtractSubtitleWithFormat(ctx context.Context, filePath string, trackIndex 
 	}
 
 	// Resolve .strm shortcuts to their remote URLs.
-	resolved, err := resolveTranscodeInputPath(filePath)
+	resolved, err := ResolveTranscodeInputPath(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve subtitle input path: %w", err)
 	}
