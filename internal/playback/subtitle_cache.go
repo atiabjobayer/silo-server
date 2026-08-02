@@ -176,6 +176,57 @@ func (c *SubtitleCache) serveWindowedSUP(w http.ResponseWriter, r *http.Request,
 	return extract(r.Context(), opts)
 }
 
+// ServeTextExtract serves a text subtitle extract (VTT, ASS, or SRT) from the
+// cache when available, or extracts and caches it for future requests. Unlike
+// SUP extracts, text formats don't use windowing — the full track is always
+// extracted and cached. For .strm remote streams this avoids a 4-35 second
+// ffmpeg demux on every request.
+//
+// format is the output file extension without dot (e.g. "vtt", "ass", "srt").
+// contentType is the HTTP Content-Type to set on cache hits.
+func (c *SubtitleCache) ServeTextExtract(
+	w http.ResponseWriter,
+	r *http.Request,
+	opts StreamExtractOpts,
+	format string,
+	contentType string,
+	extract SUPExtractFunc,
+) error {
+	if cached, _, ok := c.lookupExt(opts.InputPath, opts.TrackIndex, format); ok {
+		defer func() { _ = cached.Close() }()
+		slog.DebugContext(r.Context(), "text subtitle stream served from cache",
+			"input", opts.InputPath, "track", opts.TrackIndex, "format", format)
+		w.Header().Set("Content-Type", contentType+"; charset=utf-8")
+		w.Header().Set("Cache-Control", "private, no-cache")
+		// Write the full cached content — text tracks are small (typically
+		// < 1 MB), so buffering in http.ServeContent is fine.
+		http.ServeContent(w, r, "", time.Time{}, cached)
+		return nil
+	}
+
+	w.Header().Set("Content-Type", contentType+"; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+
+	fill := c.beginFillExt(opts.InputPath, opts.TrackIndex, format)
+	var writer io.Writer = w
+	if fill != nil {
+		writer = fill.Tee(w)
+	}
+
+	opts.Writer = writer
+	err := extract(r.Context(), opts)
+	if fill != nil {
+		if err != nil {
+			fill.Discard()
+		} else if commitErr := fill.Commit(); commitErr != nil {
+			slog.WarnContext(r.Context(), "text subtitle cache commit failed",
+				"input", opts.InputPath, "track", opts.TrackIndex, "format", format, "error", commitErr)
+		}
+	}
+	return err
+}
+
 // WarmInBackground starts a detached full-track extract that fills the cache
 // entry for opts' source+track, so future windowed requests can extract from
 // the small cached .sup instead of the original file. The warm runs on a
@@ -262,7 +313,13 @@ func subtitleCacheKey(inputPath string, trackIndex int, mtime time.Time, size in
 	return fmt.Sprintf("%s%d-%d.sup", subtitleCacheKeyPrefix(inputPath, trackIndex), mtime.UnixNano(), size)
 }
 
-// Lookup opens the cached full-track .sup extract for the given source file
+// subtitleCacheKeyExt is like subtitleCacheKey but uses the given file
+// extension (without leading dot) instead of hardcoding ".sup".
+func subtitleCacheKeyExt(inputPath string, trackIndex int, mtime time.Time, size int64, ext string) string {
+	return fmt.Sprintf("%s%d-%d.%s", subtitleCacheKeyPrefix(inputPath, trackIndex), mtime.UnixNano(), size, ext)
+}
+
+// Lookup opens the cached full-track extract for the given source file
 // and subtitle stream ordinal. The source is stat'ed on every lookup: an
 // mtime or size mismatch means the entry (if any) is stale and reads as a
 // miss. On a hit the returned modTime is the *source* file's mtime — stable
@@ -270,7 +327,12 @@ func subtitleCacheKey(inputPath string, trackIndex int, mtime time.Time, size in
 // is bumped to record recency for LRU eviction. The caller owns closing the
 // returned file.
 func (c *SubtitleCache) Lookup(inputPath string, trackIndex int) (f *os.File, modTime time.Time, ok bool) {
-	path, modTime, ok := c.cachedEntryPath(inputPath, trackIndex)
+	return c.lookupExt(inputPath, trackIndex, "sup")
+}
+
+// lookupExt is like Lookup but for any cached format (extension without dot).
+func (c *SubtitleCache) lookupExt(inputPath string, trackIndex int, ext string) (f *os.File, modTime time.Time, ok bool) {
+	path, modTime, ok := c.cachedEntryPathExt(inputPath, trackIndex, ext)
 	if !ok {
 		return nil, time.Time{}, false
 	}
@@ -288,6 +350,11 @@ func (c *SubtitleCache) Lookup(inputPath string, trackIndex int) (f *os.File, mo
 // Callers that hand the path to an external reader (ffmpeg) rather than
 // opening it themselves use this instead of Lookup.
 func (c *SubtitleCache) cachedEntryPath(inputPath string, trackIndex int) (path string, srcModTime time.Time, ok bool) {
+	return c.cachedEntryPathExt(inputPath, trackIndex, "sup")
+}
+
+// cachedEntryPathExt is like cachedEntryPath but for any cached format.
+func (c *SubtitleCache) cachedEntryPathExt(inputPath string, trackIndex int, ext string) (path string, srcModTime time.Time, ok bool) {
 	dir := c.dir()
 	if dir == "" {
 		return "", time.Time{}, false
@@ -296,7 +363,7 @@ func (c *SubtitleCache) cachedEntryPath(inputPath string, trackIndex int) (path 
 	if err != nil {
 		return "", time.Time{}, false
 	}
-	path = filepath.Join(dir, subtitleCacheKey(inputPath, trackIndex, src.ModTime(), src.Size()))
+	path = filepath.Join(dir, subtitleCacheKeyExt(inputPath, trackIndex, src.ModTime(), src.Size(), ext))
 	if _, err := os.Stat(path); err != nil {
 		return "", time.Time{}, false
 	}
@@ -332,6 +399,11 @@ type SubtitleCacheFill struct {
 // cache directory can't be created, or another fill for the same track is
 // already in flight.
 func (c *SubtitleCache) BeginFill(inputPath string, trackIndex int) *SubtitleCacheFill {
+	return c.beginFillExt(inputPath, trackIndex, "sup")
+}
+
+// beginFillExt is like BeginFill but for any cached format.
+func (c *SubtitleCache) beginFillExt(inputPath string, trackIndex int, ext string) *SubtitleCacheFill {
 	dir := c.dir()
 	if dir == "" {
 		return nil
@@ -344,7 +416,7 @@ func (c *SubtitleCache) BeginFill(inputPath string, trackIndex int) *SubtitleCac
 		slog.Warn("subtitle cache dir create failed", "dir", dir, "error", err)
 		return nil
 	}
-	key := subtitleCacheKey(inputPath, trackIndex, src.ModTime(), src.Size())
+	key := subtitleCacheKeyExt(inputPath, trackIndex, src.ModTime(), src.Size(), ext)
 
 	c.mu.Lock()
 	if _, busy := c.inflight[key]; busy {
@@ -462,6 +534,19 @@ func (f *SubtitleCacheFill) closeAndRemoveTmp() {
 	}
 }
 
+// Known cached subtitle extensions for eviction and stale-sibling cleanup.
+var cachedSubtitleExts = []string{".sup", ".vtt", ".ass", ".srt"}
+
+// isCachedSubtitleExt reports whether the filename has a known cache extension.
+func isCachedSubtitleExt(name string) bool {
+	for _, ext := range cachedSubtitleExts {
+		if strings.HasSuffix(name, ext) {
+			return true
+		}
+	}
+	return false
+}
+
 // removeStaleSiblings deletes committed entries for the same source+track
 // with a different mtime/size suffix — the source was replaced, so those can
 // never be served again.
@@ -473,7 +558,7 @@ func (c *SubtitleCache) removeStaleSiblings(dir, inputPath string, trackIndex in
 	}
 	for _, e := range entries {
 		name := e.Name()
-		if name == keepKey || !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".sup") {
+		if name == keepKey || !strings.HasPrefix(name, prefix) || !isCachedSubtitleExt(name) {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
@@ -514,7 +599,7 @@ func (c *SubtitleCache) evict(dir string) {
 			}
 			continue
 		}
-		if !strings.HasSuffix(e.Name(), ".sup") {
+		if !isCachedSubtitleExt(e.Name()) {
 			continue
 		}
 		ents = append(ents, cacheEnt{path: path, size: info.Size(), mtime: info.ModTime()})

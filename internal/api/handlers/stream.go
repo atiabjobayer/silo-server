@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -562,6 +563,19 @@ func (h *StreamHandler) streamEmbeddedSubtitle(w http.ResponseWriter, r *http.Re
 	// and fast, ASS is small.
 	if outFormat == "sup" {
 		err := h.SubtitleCache.ServeSUPExtract(w, r, opts, playback.StreamExtractSubtitle)
+		playback.LogSubtitleStreamError(r.Context(), err, file.ID, embeddedIndex)
+		return
+	}
+
+	// For .strm remote streams, text subtitle extraction also requires a
+	// full remote demux (4-35 seconds observed). Cache them the same way
+	// SUP extracts are cached so repeat requests are instant.
+	if strings.EqualFold(filepath.Ext(file.FilePath), ".strm") {
+		contentType := "text/vtt"
+		if outFormat == "ass" {
+			contentType = "text/x-ssa"
+		}
+		err := h.SubtitleCache.ServeTextExtract(w, r, opts, outFormat, contentType, playback.StreamExtractSubtitle)
 		playback.LogSubtitleStreamError(r.Context(), err, file.ID, embeddedIndex)
 		return
 	}
