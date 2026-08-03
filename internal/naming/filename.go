@@ -25,6 +25,11 @@ var (
 	// tokens or codec strings that contain "x".
 	seasonEpisodeXRe = regexp.MustCompile(`(?i)(?:^|[^0-9])(\d{1,4})\s*[x×]\s*(\d{1,3})(?:[^0-9]|$)`)
 
+	// episodeOnlyRe matches episode-only tokens such as "Episode 01", "Ep01",
+	// or "E 12". We intentionally require an explicit episode label to avoid
+	// matching arbitrary numbers in movie titles.
+	episodeOnlyRe = regexp.MustCompile(`(?i)\b(?:episode|ep|e)\s*[-._ ]?\s*(\d{1,3})\b`)
+
 	// airDateRe matches daily/by-date episode names using Jellyfin-style
 	// separators: yyyy-MM-dd, yyyy.MM.dd, yyyy_MM_dd, or yyyy MM dd.
 	airDateRe = regexp.MustCompile(`(?:^|[^0-9])((?:19|20)\d{2})[-._ ]([01]\d)[-._ ]([0-3]\d)(?:[^0-9]|$)`)
@@ -68,6 +73,7 @@ func ResolvePathContext(filePath string, libraryType string) *PathContext {
 
 	parsedSeason := 0
 	parsedEpisode := 0
+	parsedEpisodeOnly := 0
 	parsedAirDate := ""
 	if m := seasonEpisodeRe.FindStringSubmatch(nameNoExt); m != nil {
 		parsedSeason, _ = strconv.Atoi(m[1])
@@ -77,6 +83,8 @@ func ResolvePathContext(filePath string, libraryType string) *PathContext {
 		parsedSeason, _ = strconv.Atoi(m[1])
 		parsedEpisode, _ = strconv.Atoi(m[2])
 		ctx.HasEpisodePattern = true
+	} else if m := episodeOnlyRe.FindStringSubmatch(nameNoExt); m != nil {
+		parsedEpisodeOnly, _ = strconv.Atoi(m[1])
 	}
 	if airDate, ok := parseAirDate(nameNoExt); ok {
 		parsedAirDate = airDate
@@ -121,6 +129,12 @@ func ResolvePathContext(filePath string, libraryType string) *PathContext {
 		if ctx.HasEpisodePattern {
 			ctx.SeasonNum = parsedSeason
 			ctx.EpisodeNum = parsedEpisode
+		} else if parsedEpisodeOnly > 0 {
+			if seasonNum, ok := firstSeasonNumber(parts[:max(len(parts)-1, 0)], allowNumericSeasonDirs); ok {
+				ctx.SeasonNum = seasonNum
+				ctx.EpisodeNum = parsedEpisodeOnly
+				ctx.HasEpisodePattern = true
+			}
 		} else if seasonNum, ok := firstSeasonNumber(parts[:max(len(parts)-1, 0)], allowNumericSeasonDirs); ok {
 			ctx.SeasonNum = seasonNum
 		}
