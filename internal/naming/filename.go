@@ -20,6 +20,11 @@ var (
 	// seasonEpisodeRe matches S01E01 or s01e05 patterns in filenames.
 	seasonEpisodeRe = regexp.MustCompile(`(?i)[Ss](\d{1,4})[Ee](\d{1,3})`)
 
+	// seasonEpisodeXRe matches NxNN patterns in filenames (e.g. 7x13, 10X01).
+	// Deliberately requires non-digit boundaries to avoid capturing resolution
+	// tokens or codec strings that contain "x".
+	seasonEpisodeXRe = regexp.MustCompile(`(?i)(?:^|[^0-9])(\d{1,4})\s*[x×]\s*(\d{1,3})(?:[^0-9]|$)`)
+
 	// airDateRe matches daily/by-date episode names using Jellyfin-style
 	// separators: yyyy-MM-dd, yyyy.MM.dd, yyyy_MM_dd, or yyyy MM dd.
 	airDateRe = regexp.MustCompile(`(?:^|[^0-9])((?:19|20)\d{2})[-._ ]([01]\d)[-._ ]([0-3]\d)(?:[^0-9]|$)`)
@@ -65,6 +70,10 @@ func ResolvePathContext(filePath string, libraryType string) *PathContext {
 	parsedEpisode := 0
 	parsedAirDate := ""
 	if m := seasonEpisodeRe.FindStringSubmatch(nameNoExt); m != nil {
+		parsedSeason, _ = strconv.Atoi(m[1])
+		parsedEpisode, _ = strconv.Atoi(m[2])
+		ctx.HasEpisodePattern = true
+	} else if m := seasonEpisodeXRe.FindStringSubmatch(nameNoExt); m != nil {
 		parsedSeason, _ = strconv.Atoi(m[1])
 		parsedEpisode, _ = strconv.Atoi(m[2])
 		ctx.HasEpisodePattern = true

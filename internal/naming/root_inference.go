@@ -15,6 +15,7 @@ var (
 	inferWhitespaceTokenRe = regexp.MustCompile(`\s+`)
 	inferReleaseTokenRe    = regexp.MustCompile(`(?i)\b(?:remux|bluray|bdrip|brrip|web[ ._-]?dl|webrip|hdr|dv|2160p|1080p|720p|x264|x265|h\.?264|h\.?265|hevc|av1|aac|dts|truehd|atmos|eac3|ac3|flac|opus|mp3|ddp?5\.1|ddp?7\.1|ddp?2\.0)\b`)
 	inferSeasonEpisodeRe   = regexp.MustCompile(`(?i)[Ss](\d{1,4})[Ee](\d{1,3})`)
+	inferSeasonEpisodeXRe  = regexp.MustCompile(`(?i)(?:^|[^0-9])(\d{1,4})\s*[x×]\s*(\d{1,3})(?:[^0-9]|$)`)
 	inferSeasonDirRe       = regexp.MustCompile(`(?i)^Season\s+(\d{1,4})(?:\s.*)?$`)
 	inferNumericSeasonRe   = regexp.MustCompile(`^\d{1,4}$`)
 	inferSpecialsDirRe     = regexp.MustCompile(`(?i)^(?:specials?|extras?)$`)
@@ -298,7 +299,7 @@ func extractPathEvidence(filePath string, libraryType string) RootAssignment {
 	pathParts := strings.Split(filepath.ToSlash(cleanFilePath), "/")
 	dirParts := pathParts[:max(len(pathParts)-1, 0)]
 
-	hasEpisodePattern := inferSeasonEpisodeRe.MatchString(nameNoExt)
+	hasEpisodePattern := inferSeasonEpisodeRe.MatchString(nameNoExt) || inferSeasonEpisodeXRe.MatchString(nameNoExt)
 	hasSeasonStructure := detectInferSeasonStructure(dirParts, hasEpisodePattern || normalizeInferLibraryType(libraryType) == "series")
 	parentTitle, parentYear, parentTrusted := parseInferFolderTitleYear(parentBase)
 	fileStem := parseInferMovieStem(nameNoExt, parentTitle, parentYear)
@@ -407,7 +408,7 @@ func IsMisplacedSeriesFile(filePath string) bool {
 	clean := filepath.Clean(filePath)
 	baseName := filepath.Base(clean)
 	nameNoExt := strings.TrimSuffix(baseName, filepath.Ext(baseName))
-	if !inferSeasonEpisodeRe.MatchString(nameNoExt) {
+	if !(inferSeasonEpisodeRe.MatchString(nameNoExt) || inferSeasonEpisodeXRe.MatchString(nameNoExt)) {
 		return false
 	}
 	parts := strings.Split(filepath.ToSlash(clean), "/")
