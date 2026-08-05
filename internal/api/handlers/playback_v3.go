@@ -1595,12 +1595,34 @@ func (h *PlaybackHandler) HandlePlaybackRouteEventV3(w http.ResponseWriter, r *h
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to authorize the route event")
 			return
 		}
-		writeError(w, http.StatusForbidden, "forbidden", "Route event does not belong to this profile")
+		// Stale client events are telemetry-only; accepting as a no-op avoids
+		// interrupting active playback when the app races an old session/attempt.
+		slog.InfoContext(r.Context(), "protocol v3 route event ignored for missing attempt", "component", "api",
+			"playback_attempt_id", event.PlaybackAttemptID,
+			"session_id", event.SessionID,
+			"user_id", userID,
+			"profile_id", profileID,
+			"event", event.Event,
+		)
+		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 	if identity.UserID != userID || identity.ProfileID != profileID ||
 		(event.SessionID != "" && identity.PlaybackAttemptID != event.PlaybackAttemptID) {
-		writeError(w, http.StatusForbidden, "forbidden", "Route event does not belong to this profile")
+		// Keep route events best-effort: reject persistence but do not fail the
+		// playback session when a client reports against a superseded attempt.
+		slog.InfoContext(r.Context(), "protocol v3 route event ignored for ownership mismatch", "component", "api",
+			"playback_attempt_id", event.PlaybackAttemptID,
+			"session_id", event.SessionID,
+			"identity_attempt_id", identity.PlaybackAttemptID,
+			"identity_session_id", identity.SessionID,
+			"identity_user_id", identity.UserID,
+			"identity_profile_id", identity.ProfileID,
+			"user_id", userID,
+			"profile_id", profileID,
+			"event", event.Event,
+		)
+		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 	event.Diagnostics = sanitizeDiagnosticsV3(event.Diagnostics)

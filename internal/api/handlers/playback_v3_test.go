@@ -1265,6 +1265,18 @@ func TestHandlePlaybackRouteEventV3RejectsWhileDisabled(t *testing.T) {
 	}
 }
 
+func TestHandlePlaybackRouteEventV3AcceptsStaleAttemptAsNoop(t *testing.T) {
+	handler := NewPlaybackHandler(playback.NewSessionManager(0, 0))
+	handler.SettingsRepo = &mutablePlaybackSettingsV3{values: map[string]string{"playback.protocol_v3_enabled": "true"}}
+	reqBody := `{"protocol_version":3,"playback_attempt_id":"missing-attempt","session_id":"00000000-0000-4000-8000-000000000001","event":"first_frame","output_route_generation":1}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/playback/route-events", strings.NewReader(reqBody)).WithContext(newAuthorizedPlaybackContext())
+	rr := httptest.NewRecorder()
+	handler.HandlePlaybackRouteEventV3(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestSanitizeDiagnosticsV3PreservesPlayerFailureEvidence(t *testing.T) {
 	got := sanitizeDiagnosticsV3(map[string]string{
 		"error_code":                     "2004",
