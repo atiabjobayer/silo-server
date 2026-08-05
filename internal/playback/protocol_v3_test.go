@@ -1037,6 +1037,34 @@ func TestPlanPlaybackV3TimelineChangePreservesRouteIdentity(t *testing.T) {
 	}
 }
 
+func TestPlanPlaybackV3AndroidHEVCAC3MKVForcesHlsTranscode(t *testing.T) {
+	file := detailedFixtureFileV3()
+	file.CodecAudio = "ac3"
+	file.HDR = false
+	file.VideoTracks[0].VideoRange = "SDR"
+	file.VideoTracks[0].VideoRangeType = "SDR"
+	file.VideoTracks[0].ColorTransfer = "bt709"
+	file.AudioTracks[0] = models.AudioTrack{Codec: "ac3", Channels: 6, Layout: "5.1"}
+
+	request := validStartRequestV3()
+	request.ClientFeatures = append(request.ClientFeatures, FeatureDetailedDecodeV3)
+	request.ClientPlaybackContext.Features = append(request.ClientPlaybackContext.Features, FeatureDetailedDecodeV3)
+	request.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
+	request.Capabilities.CodecsAudio = []string{"aac", "ac3"}
+
+	result := PlanPlaybackV3(PlannerInputV3{
+		Request: request, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0,
+		Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: testTransformationRegistryV3(),
+	})
+
+	if result.Plan == nil || result.Plan.Delivery != DeliveryTranscodeHLSV3 || result.PlayMethod != PlayTranscode {
+		t.Fatalf("result = %#v", result)
+	}
+	if result.Plan.DecisionReason != "android_direct_play_guard" {
+		t.Fatalf("decision reason = %q", result.Plan.DecisionReason)
+	}
+}
+
 func validStartRequestV3() StartRequestV3 {
 	return StartRequestV3{
 		ProtocolVersion:            ProtocolV3,

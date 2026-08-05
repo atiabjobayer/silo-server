@@ -240,12 +240,23 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		quality = originalQualityResultV3(source)
 		quality.Warnings = warnings
 	}
+	forceAndroidHEVCAC3Transcode := shouldForceAndroidHEVCAC3TranscodeV3(source, input.Request)
+	if forceAndroidHEVCAC3Transcode {
+		base.DegradationWarnings = append(base.DegradationWarnings, DegradationWarningV3{
+			Code:    "android_direct_play_guard",
+			Message: "Original direct playback is bypassed for this Android HEVC/AC3 MKV source to avoid known client decoder instability.",
+		})
+	}
 	base.DegradationWarnings = append(base.DegradationWarnings, quality.Warnings...)
 
-	if quality.RequiresTranscode || !videoOK ||
+	if quality.RequiresTranscode || forceAndroidHEVCAC3Transcode || !videoOK ||
 		(!rangeOK && !dvStripEligible && !clientDV81Eligible && !clientHDR10Eligible) ||
 		(subtitle.RequiresBurn && !remuxSubtitleOK && !hlsRemuxSubtitleOK) {
-		return planVideoTranscodeV3(input, base, source, quality, hlsSubtitle, "")
+		reasonOverride := ""
+		if forceAndroidHEVCAC3Transcode {
+			reasonOverride = "android_direct_play_guard"
+		}
+		return planVideoTranscodeV3(input, base, source, quality, hlsSubtitle, reasonOverride)
 	}
 
 	// Profile 7 is normalized on the client against the original range-capable
@@ -705,6 +716,19 @@ func hlsNativeAudioCodecV3(codec string) bool {
 		return true
 	}
 	return false
+}
+
+func shouldForceAndroidHEVCAC3TranscodeV3(source SourceDescriptorV3, request StartRequestV3) bool {
+	if !strings.EqualFold(strings.TrimSpace(request.ClientPlaybackContext.Platform), "android") {
+		return false
+	}
+	if source.DynamicRange != "" && source.DynamicRange != "sdr" {
+		return false
+	}
+	if !strings.EqualFold(source.Container, "mkv") || !strings.EqualFold(source.VideoCodec, "hevc") {
+		return false
+	}
+	return strings.EqualFold(source.AudioCodec, "ac3") || strings.EqualFold(source.AudioCodec, "eac3")
 }
 
 // hdrTranscodeUnavailableV3 mirrors planVideoTranscodeV3's terminal
