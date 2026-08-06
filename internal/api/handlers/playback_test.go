@@ -616,6 +616,31 @@ func TestBuildTranscodeStartResponse_UnifiedSeekAnywhere(t *testing.T) {
 	if encodedResp.TimelineOffsetSeconds != 0 {
 		t.Fatalf("encoded TimelineOffsetSeconds = %v, want 0", encodedResp.TimelineOffsetSeconds)
 	}
+
+	longEncodedResp := buildTranscodeStartResponse(
+		transcodeStartRequest{
+			SessionID:        "session-long-encoded",
+			SeekSeconds:      18.261,
+			TargetCodecVideo: "h264",
+			SegmentDuration:  2,
+		},
+		&models.MediaFile{Duration: 1_000_000},
+		nil,
+		"/playback/transcode/session-long-encoded/master.m3u8",
+		18,
+	)
+	if longEncodedResp.CanSeekAnywhere {
+		t.Fatal("long encoded response should require explicit restart seeks")
+	}
+	if math.Abs(longEncodedResp.PlayerStartSeconds-0.261) > 0.0001 {
+		t.Fatalf("long encoded PlayerStartSeconds = %v, want 0.261", longEncodedResp.PlayerStartSeconds)
+	}
+	if longEncodedResp.StreamOriginSeconds != 18 {
+		t.Fatalf("long encoded StreamOriginSeconds = %v, want 18", longEncodedResp.StreamOriginSeconds)
+	}
+	if longEncodedResp.TimelineOffsetSeconds != 18 {
+		t.Fatalf("long encoded TimelineOffsetSeconds = %v, want 18", longEncodedResp.TimelineOffsetSeconds)
+	}
 }
 
 func TestHandleStartPlayback_PersistsSeriesPlaybackPreferenceForEpisodes(t *testing.T) {
@@ -1614,7 +1639,7 @@ func TestHandleChangeAudioTrack_RemoteTranscodeRestartsNodeAndMintsFullRecipe(t 
 		CodecAudio: "aac",
 		Container:  "mkv",
 		Bitrate:    8000,
-		Duration:   3600,
+		Duration:   1_000_000,
 		AudioTracks: []models.AudioTrack{
 			{Codec: "aac", Default: true},
 			{Codec: "ac3"},
@@ -1703,6 +1728,9 @@ func TestHandleChangeAudioTrack_RemoteTranscodeRestartsNodeAndMintsFullRecipe(t 
 	if remoteStartReq.SeekSeconds != 120 {
 		t.Fatalf("remote SeekSeconds = %v, want aligned 120", remoteStartReq.SeekSeconds)
 	}
+	if remoteStartReq.StreamOriginSeconds != 120 {
+		t.Fatalf("remote StreamOriginSeconds = %v, want aligned 120", remoteStartReq.StreamOriginSeconds)
+	}
 	if remoteStartReq.TargetResolution != "720p" || remoteStartReq.TargetCodecVideo != "h264" {
 		t.Fatalf("remote target recipe = %q/%q, want 720p/h264", remoteStartReq.TargetResolution, remoteStartReq.TargetCodecVideo)
 	}
@@ -1738,6 +1766,15 @@ func TestHandleChangeAudioTrack_RemoteTranscodeRestartsNodeAndMintsFullRecipe(t 
 	}
 	if claims.TargetBitrateKbps != 2000 {
 		t.Fatalf("token TargetBitrateKbps = %d, want 2000 (recipe-complete)", claims.TargetBitrateKbps)
+	}
+	if claims.StreamOriginSeconds != 120 {
+		t.Fatalf("token StreamOriginSeconds = %v, want aligned 120", claims.StreamOriginSeconds)
+	}
+	if resp.PlayerStartSeconds == nil || *resp.PlayerStartSeconds != 1.5 ||
+		resp.StreamOriginSeconds == nil || *resp.StreamOriginSeconds != 120 ||
+		resp.TimelineOffsetSeconds == nil || *resp.TimelineOffsetSeconds != 120 ||
+		resp.CanSeekAnywhere == nil || *resp.CanSeekAnywhere {
+		t.Fatalf("remote long encoded response timeline = %+v", resp)
 	}
 	if claims.SeekSeconds != 120 {
 		t.Fatalf("token SeekSeconds = %v, want aligned 120", claims.SeekSeconds)
@@ -2142,6 +2179,98 @@ func TestHandleStartTranscode_LocalPathPropagatesSelectedAudioTrack(t *testing.T
 	}
 }
 
+func TestHandleChangeAudioTrack_LocalLongEncodedPreservesWindowedTimeline(t *testing.T) {
+	sessionMgr := playback.NewSessionManager(0, 0)
+	file := &models.MediaFile{
+		ID:          42,
+		ContentID:   "movie-1",
+		FilePath:    writePlaybackTestMediaFile(t, "movie-local-long-encoded.mkv"),
+		Resolution:  "1080p",
+		CodecVideo:  "hevc",
+		CodecAudio:  "ac3",
+		Container:   "mkv",
+		Bitrate:     8000,
+		Duration:    1_000_000,
+		AudioTracks: []models.AudioTrack{{Codec: "ac3", Default: true}, {Codec: "dts"}},
+	}
+	session, err := sessionMgr.StartSession(1, "profile-1", file.ID, playback.PlayTranscode, true)
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+
+	handler := NewPlaybackHandler(sessionMgr, testPlaybackFileResolver{file: file})
+	handler.ItemAccess = allowAllPlaybackItemAccess{}
+	handler.JWTSecret = "test-secret"
+	handler.PlaybackConfig = playbackTestConfig(writePlaybackTestFFmpeg(t), t.TempDir())
+
+	startReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/playback/transcode/start",
+		strings.NewReader(`{"session_id":"`+session.ID+`","seek_seconds":18.261,"target_resolution":"720p","target_codec_video":"h264","target_codec_audio":"aac","target_bitrate_kbps":4000,"segment_duration":2,"subtitle_track_index":-1}`),
+	).WithContext(newAuthorizedPlaybackContext())
+	startRR := httptest.NewRecorder()
+	handler.HandleStartTranscode(startRR, startReq)
+	if startRR.Code != http.StatusAccepted {
+		t.Fatalf("start status = %d, body = %s", startRR.Code, startRR.Body.String())
+	}
+
+	predecessor := handler.tm.GetTranscodeSession(session.ID)
+	if predecessor == nil {
+		t.Fatal("expected local long encoded session")
+	}
+	t.Cleanup(func() { handler.tm.CloseTranscodeSession(session.ID, "") })
+
+	changeReq := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/v1/playback/"+session.ID+"/audio",
+		strings.NewReader(`{"audio_track_index":1,"position":121.5}`),
+	).WithContext(newAuthorizedPlaybackContext())
+	changeReq = withPlaybackRouteParam(changeReq, "session_id", session.ID)
+	changeRR := httptest.NewRecorder()
+	handler.HandleChangeAudioTrack(changeRR, changeReq)
+	if changeRR.Code != http.StatusOK {
+		t.Fatalf("change status = %d, body = %s", changeRR.Code, changeRR.Body.String())
+	}
+
+	successor := handler.tm.GetTranscodeSession(session.ID)
+	if successor == nil || successor == predecessor {
+		t.Fatal("audio switch did not publish a prepared successor")
+	}
+	if predecessor.IsRunning() {
+		t.Fatal("audio switch predecessor is still running after commit")
+	}
+	opts := successor.Opts()
+	if opts.TargetCodecVideo != "h264" || opts.SeekSeconds != 120 ||
+		opts.StreamOriginSeconds != 120 || opts.CopySeekAnchorResolved ||
+		opts.StartSegmentNumber != 60 || opts.AudioTrackIndex != 1 {
+		t.Fatalf("local long encoded restart opts = %+v", opts)
+	}
+
+	var resp changeAudioResponse
+	if err := json.NewDecoder(changeRR.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode change response: %v", err)
+	}
+	manifestURL, err := url.Parse(resp.StreamURL)
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+	claims, err := streamtoken.Verify(manifestURL.Query().Get(streamTokenParam), handler.JWTSecret)
+	if err != nil {
+		t.Fatalf("verify stream token: %v", err)
+	}
+	if claims.TargetCodec != "h264" || claims.SeekSeconds != 120 ||
+		claims.StreamOriginSeconds != 120 || claims.CopySeekAnchorResolved ||
+		claims.StartSegmentNumber != 60 || claims.AudioTrackIndex != 1 {
+		t.Fatalf("local long encoded reconstruction claims = %+v", claims)
+	}
+	if resp.PlayerStartSeconds == nil || *resp.PlayerStartSeconds != 1.5 ||
+		resp.StreamOriginSeconds == nil || *resp.StreamOriginSeconds != 120 ||
+		resp.TimelineOffsetSeconds == nil || *resp.TimelineOffsetSeconds != 120 ||
+		resp.CanSeekAnywhere == nil || *resp.CanSeekAnywhere {
+		t.Fatalf("local long encoded response timeline = %+v", resp)
+	}
+}
+
 func TestHandleChangeAudioTrack_LocalCopyRestartUsesFreshSeekAnchor(t *testing.T) {
 	sessionMgr := playback.NewSessionManager(0, 0)
 	file := &models.MediaFile{
@@ -2392,6 +2521,61 @@ func TestHandleStartTranscode_SeekedCopyRemainsCopyVideo(t *testing.T) {
 				t.Fatalf("persisted recipe = target %q semantic method %q", persisted.TargetVideoCodec, semanticPlayMethod(persisted))
 			}
 		})
+	}
+}
+
+func TestHandleStartTranscode_LongEncodedUsesAlignedRealManifestOrigin(t *testing.T) {
+	sessionMgr := playback.NewSessionManager(0, 0)
+	file := &models.MediaFile{
+		ID:          42,
+		ContentID:   "movie-1",
+		FilePath:    writePlaybackTestMediaFile(t, "movie-long-encoded.mkv"),
+		Resolution:  "1080p",
+		CodecVideo:  "hevc",
+		CodecAudio:  "dts",
+		Container:   "mkv",
+		Bitrate:     25000,
+		Duration:    1_000_000,
+		AudioTracks: []models.AudioTrack{{Codec: "dts", Default: true}},
+	}
+	session, err := sessionMgr.StartSession(1, "profile-1", file.ID, playback.PlayTranscode, true)
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+
+	handler := NewPlaybackHandler(sessionMgr, testPlaybackFileResolver{file: file})
+	handler.ItemAccess = allowAllPlaybackItemAccess{}
+	handler.PlaybackConfig = playbackTestConfig(writePlaybackTestFFmpeg(t), t.TempDir())
+
+	transcodeReq := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/playback/transcode/start",
+		strings.NewReader(`{"session_id":"`+session.ID+`","seek_seconds":18.261,"target_resolution":"720p","target_codec_video":"h264","target_codec_audio":"aac","target_bitrate_kbps":4000,"segment_duration":2,"subtitle_track_index":-1,"subtitle_burn_in":false}`),
+	).WithContext(newAuthorizedPlaybackContext())
+
+	transcodeRR := httptest.NewRecorder()
+	handler.HandleStartTranscode(transcodeRR, transcodeReq)
+	if transcodeRR.Code != http.StatusAccepted {
+		t.Fatalf("transcode status = %d, body = %s", transcodeRR.Code, transcodeRR.Body.String())
+	}
+
+	var response transcodeStartResponse
+	if err := json.NewDecoder(transcodeRR.Body).Decode(&response); err != nil {
+		t.Fatalf("decode transcode response: %v", err)
+	}
+	if math.Abs(response.PlayerStartSeconds-0.261) > 0.0001 || response.StreamOriginSeconds != 18 ||
+		response.TimelineOffsetSeconds != 18 || response.CanSeekAnywhere {
+		t.Fatalf("long encoded response timeline = %+v", response)
+	}
+
+	transcodeSession := handler.tm.GetTranscodeSession(session.ID)
+	if transcodeSession == nil {
+		t.Fatal("expected local transcode session")
+	}
+	t.Cleanup(func() { _ = transcodeSession.Close() })
+	opts := transcodeSession.Opts()
+	if opts.SeekSeconds != 18 || opts.StreamOriginSeconds != 18 || opts.CopySeekAnchorResolved || opts.StartSegmentNumber != 9 {
+		t.Fatalf("long encoded seek recipe = seek %v origin %v copy anchor %v segment %d", opts.SeekSeconds, opts.StreamOriginSeconds, opts.CopySeekAnchorResolved, opts.StartSegmentNumber)
 	}
 }
 

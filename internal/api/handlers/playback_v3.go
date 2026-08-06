@@ -2043,13 +2043,18 @@ func configureHLSTimelineV3(plan *playback.PlanV3, videoCodec string, segmentDur
 	seek := alignedSeekSeconds(requested, segmentDuration, videoCodec)
 	startSegment := computeStartSegment(seek, segmentDuration)
 	plan.Timeline.SourceStartSeconds = requested
-	if strings.EqualFold(videoCodec, "copy") {
-		plan.Timeline.PlayerStartSeconds = 0
+	usesGrowingManifest := strings.EqualFold(videoCodec, "copy") ||
+		!playback.CanGenerateSyntheticManifest(durationSeconds, segmentDuration)
+	if usesGrowingManifest {
+		// Encoded streams seek to the preceding segment boundary. Preserve the
+		// requested sub-segment offset so playback still begins at the exact
+		// requested source position. Copy seeks are already exact, making this 0.
+		plan.Timeline.PlayerStartSeconds = max(0, requested-seek)
 		plan.Timeline.StreamOriginSeconds = seek
 		plan.Timeline.TimelineOffsetSeconds = seek
 		windowStart := seek
 		plan.Timeline.SeekWindowStartSeconds = &windowStart
-		// A copy remux is served from FFmpeg's live, still-growing playlist
+		// This transport is served from FFmpeg's live, still-growing playlist
 		// (see BuildPlaybackManifest), so the seekable extent is whatever has
 		// been produced so far — a value this plan cannot know and could not
 		// keep current if it did. Publishing the media runtime here instead

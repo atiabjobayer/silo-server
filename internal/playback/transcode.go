@@ -152,6 +152,11 @@ const defaultSegmentDuration = 2
 // embedded length matches what the node actually produces.
 const DefaultSegmentDuration = defaultSegmentDuration
 
+// maxSyntheticManifestSegments preserves the historical worst-case playlist
+// size (100,000 seconds at two-second segments). Longer media uses FFmpeg's
+// real sliding playlist instead of allocating a complete synthetic manifest.
+const maxSyntheticManifestSegments = 50_000
+
 const maxPersistedFFmpegLines = 2000
 const maxPersistedFFmpegBytes = 256 * 1024
 const maxPersistedFFmpegChars = 2000
@@ -424,7 +429,10 @@ func buildFFmpegArgs(opts TranscodeOpts) []string {
 		"-max_delay", "5000000",
 		"-f", "hls",
 		"-hls_time", fmt.Sprintf("%d", opts.SegmentDuration),
-		"-hls_list_size", "0",
+		// Bound real playlists as well as synthetic ones. Segment files remain on
+		// disk because delete_segments is not enabled, while the manifest itself
+		// cannot grow without limit during multi-day sessions.
+		"-hls_list_size", strconv.Itoa(maxSyntheticManifestSegments),
 		"-hls_segment_type", segmentType,
 		// Write segments to temp files first so the player never fetches a
 		// partially-written segment during a quality switch.
@@ -1064,12 +1072,14 @@ func (s *TranscodeSession) WaitForManifest(timeout time.Duration) ([]byte, error
 // Copy-video sessions always expose FFmpeg's real manifest so the playlist
 // timing matches the variable-length fragments FFmpeg actually writes and the
 // seekable window reflects what FFmpeg has produced so far. Encoded transcodes
-// still use the synthetic full VOD manifest when duration is known because
-// forced keyframes make that timeline stable and seek-anywhere friendly.
+// use the synthetic full VOD manifest only while its segment count is bounded;
+// longer media uses FFmpeg's real sliding playlist.
 func (s *TranscodeSession) BuildPlaybackManifest(segPrefix, rawQuery string) ([]byte, error) {
 	opts := s.Opts()
-	if strings.EqualFold(opts.TargetCodecVideo, "copy") || opts.TotalDuration <= 0 {
-		// Copy-video or unknown-duration sessions must use FFmpeg's real manifest.
+	if strings.EqualFold(opts.TargetCodecVideo, "copy") ||
+		!CanGenerateSyntheticManifest(opts.TotalDuration, opts.SegmentDuration) {
+		// Copy-video, unknown-duration, or oversized sessions must use FFmpeg's
+		// real manifest.
 		manifest, err := s.WaitForManifest(30 * time.Second)
 		if err != nil {
 			return nil, err
@@ -1078,6 +1088,154 @@ func (s *TranscodeSession) BuildPlaybackManifest(segPrefix, rawQuery string) ([]
 	}
 
 	return s.GenerateFullManifest(segPrefix, rawQuery), nil
+}
+
+// SourceTimelineQueryParam opts a real transcode manifest into source-time
+// alignment for compatibility clients that apply their resume position to the
+// HLS timeline themselves.
+const SourceTimelineQueryParam = "source_timeline"
+
+// BuildSourceAlignedPlaybackManifest builds the normal playback manifest and,
+// when it is a seeked real playlist, prepends a virtual unavailable span so the
+// first produced segment retains its source-time position. Synthetic manifests
+// already cover the full source timeline and need no adjustment.
+func (s *TranscodeSession) BuildSourceAlignedPlaybackManifest(segPrefix, rawQuery string) ([]byte, error) {
+	manifest, err := s.BuildPlaybackManifest(segPrefix, rawQuery)
+	if err != nil {
+		return nil, err
+	}
+	opts := s.Opts()
+	usesRealManifest := strings.EqualFold(opts.TargetCodecVideo, "copy") ||
+		!CanGenerateSyntheticManifest(opts.TotalDuration, opts.SegmentDuration)
+	if opts.SeekSeconds <= 0 || !usesRealManifest {
+		return manifest, nil
+	}
+
+	gapURI := segPrefix + "source_timeline_gap" + hlsSegmentExtension(opts)
+	if rawQuery != "" {
+		gapURI += "?" + rawQuery
+	}
+	return AlignRealManifestToSourceTimeline(manifest, opts, gapURI)
+}
+
+// AlignRealManifestToSourceTimeline prepends bounded EXT-X-GAP segments to a
+// seeked FFmpeg playlist. The gaps contribute the omitted source time while
+// allowing clients to seek to the original source position.
+func AlignRealManifestToSourceTimeline(manifest []byte, opts TranscodeOpts, gapURI string) ([]byte, error) {
+	if opts.SeekSeconds <= 0 {
+		return manifest, nil
+	}
+	timeline, err := parseManifestTimeline(manifest)
+	if err != nil {
+		return nil, err
+	}
+	if len(timeline.entries) == 0 {
+		return nil, fmt.Errorf("manifest contains no media segments")
+	}
+
+	segmentDuration := opts.SegmentDuration
+	if segmentDuration <= 0 {
+		segmentDuration = defaultSegmentDuration
+	}
+	firstSegment := timeline.entries[0].number
+	advancedSegments := max(0, firstSegment-opts.StartSegmentNumber)
+	gapDuration := opts.SeekSeconds + float64(advancedSegments*segmentDuration)
+	if gapDuration <= 0 {
+		return manifest, nil
+	}
+	if gapURI == "" {
+		gapURI = "source_timeline_gap" + hlsSegmentExtension(opts)
+	}
+
+	lines := bytes.Split(manifest, []byte("\n"))
+	targetDuration := segmentDuration
+	for _, line := range lines {
+		trimmed := bytes.TrimSpace(line)
+		if !bytes.HasPrefix(trimmed, []byte("#EXT-X-TARGETDURATION:")) {
+			continue
+		}
+		value := strings.TrimSpace(strings.TrimPrefix(string(trimmed), "#EXT-X-TARGETDURATION:"))
+		parsed, parseErr := strconv.Atoi(value)
+		if parseErr != nil || parsed <= 0 {
+			return nil, fmt.Errorf("parse manifest target duration %q", value)
+		}
+		targetDuration = parsed
+		break
+	}
+
+	// Keep the real segment's media sequence aligned with its FFmpeg segment
+	// number when possible. Very large seeks remain bounded by the same limit as
+	// generated VOD manifests; their gap durations grow instead of their count.
+	gapCount := max(1, firstSegment)
+	if gapCount > maxSyntheticManifestSegments {
+		gapCount = maxSyntheticManifestSegments
+	}
+	gapSegmentDuration := gapDuration / float64(gapCount)
+	requiredTargetDuration := int(math.Ceil(gapSegmentDuration))
+	if requiredTargetDuration > targetDuration {
+		targetDuration = requiredTargetDuration
+	}
+	mediaSequence := max(0, firstSegment-gapCount)
+
+	result := make([][]byte, 0, len(lines)+gapCount*3)
+	insertedGap := false
+	foundSequence := false
+	foundVersion := false
+	for _, line := range lines {
+		trimmed := bytes.TrimSpace(line)
+		switch {
+		case bytes.HasPrefix(trimmed, []byte("#EXT-X-VERSION:")):
+			foundVersion = true
+			value := strings.TrimSpace(strings.TrimPrefix(string(trimmed), "#EXT-X-VERSION:"))
+			version, parseErr := strconv.Atoi(value)
+			if parseErr != nil {
+				return nil, fmt.Errorf("parse manifest version %q: %w", value, parseErr)
+			}
+			if version < 8 {
+				line = []byte("#EXT-X-VERSION:8")
+			}
+		case bytes.HasPrefix(trimmed, []byte("#EXT-X-TARGETDURATION:")):
+			line = []byte(fmt.Sprintf("#EXT-X-TARGETDURATION:%d", targetDuration))
+		case bytes.HasPrefix(trimmed, []byte("#EXT-X-MEDIA-SEQUENCE:")):
+			foundSequence = true
+			line = []byte(fmt.Sprintf("#EXT-X-MEDIA-SEQUENCE:%d", mediaSequence))
+		case bytes.HasPrefix(trimmed, []byte("#EXTINF:")) && !insertedGap:
+			if !foundVersion {
+				result = append(result, []byte("#EXT-X-VERSION:8"))
+				foundVersion = true
+			}
+			if !foundSequence {
+				result = append(result, []byte(fmt.Sprintf("#EXT-X-MEDIA-SEQUENCE:%d", mediaSequence)))
+				foundSequence = true
+			}
+			for range gapCount {
+				result = append(result,
+					[]byte("#EXT-X-GAP"),
+					[]byte(fmt.Sprintf("#EXTINF:%.6f,", gapSegmentDuration)),
+					[]byte(gapURI),
+				)
+			}
+			insertedGap = true
+		}
+		result = append(result, line)
+	}
+	if !insertedGap {
+		return nil, fmt.Errorf("manifest contains no segment duration")
+	}
+	return bytes.Join(result, []byte("\n")), nil
+}
+
+// CanGenerateSyntheticManifest reports whether a complete VOD playlist fits
+// within the shared segment-count bound. Callers outside playback use the same
+// decision so native and compatibility manifests cannot drift.
+func CanGenerateSyntheticManifest(totalDuration float64, segmentDuration int) bool {
+	if totalDuration <= 0 || math.IsNaN(totalDuration) || math.IsInf(totalDuration, 0) {
+		return false
+	}
+	if segmentDuration <= 0 {
+		segmentDuration = defaultSegmentDuration
+	}
+	return totalDuration <= float64(segmentDuration)*maxSyntheticManifestSegments
 }
 
 func firstNonEmptyManifestLine(manifest []byte) []byte {
