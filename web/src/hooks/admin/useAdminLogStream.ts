@@ -1,5 +1,5 @@
-import { startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
-import { getAccessToken } from "@/api/client";
+import { startTransition, useDeferredValue, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { getAccessToken, subscribeToAccessToken } from "@/api/client";
 import type {
   AdminLogAppendMessage,
   AdminLogErrorMessage,
@@ -90,6 +90,11 @@ export function useAdminLogStream<TStream extends AdminLogStream>(
   const deferredParams = useDeferredValue(params);
   const queryString = useMemo(() => buildAdminLogStreamQuery(deferredParams), [deferredParams]);
   const limit = deferredParams.limit ?? 100;
+  const accessToken = useSyncExternalStore(
+    subscribeToAccessToken,
+    () => getAccessToken(),
+    () => null,
+  );
 
   useEffect(() => {
     if (!enabled) {
@@ -132,7 +137,7 @@ export function useAdminLogStream<TStream extends AdminLogStream>(
     // Debounce the initial attempt; an explicit reconnect() retries immediately.
     const connectDelay = reconnectNonce === 0 ? 250 : 0;
     const connectTimer = window.setTimeout(() => {
-      const url = buildAdminLogStreamUrl(stream, deferredParams, getAccessToken(), window.location);
+      const url = buildAdminLogStreamUrl(stream, deferredParams, accessToken, window.location);
       try {
         ws = new WebSocket(url);
       } catch {
@@ -191,7 +196,7 @@ export function useAdminLogStream<TStream extends AdminLogStream>(
         ws.close();
       }
     };
-  }, [stream, queryString, limit, enabled, deferredParams, reconnectNonce]);
+  }, [stream, queryString, limit, enabled, deferredParams, reconnectNonce, accessToken]);
 
   return {
     rows,

@@ -12,10 +12,25 @@ export function onProfileUnverified(listener: ProfileUnverifiedListener | null) 
 let accessToken: string | null = null;
 let authContextVersion = 0;
 let refreshPromise: Promise<boolean> | null = null;
+let accessTokenListeners = new Set<() => void>();
+
+export function subscribeToAccessToken(listener: () => void) {
+  accessTokenListeners.add(listener);
+  return () => {
+    accessTokenListeners.delete(listener);
+  };
+}
+
+function notifyAccessTokenListeners() {
+  for (const listener of accessTokenListeners) {
+    listener();
+  }
+}
 
 export function setAccessToken(token: string | null) {
   if (accessToken !== token) authContextVersion += 1;
   accessToken = token;
+  notifyAccessTokenListeners();
 }
 
 function refreshCurrentAccessToken(token: string): void {
@@ -23,6 +38,7 @@ function refreshCurrentAccessToken(token: string): void {
   // queued request may use its captured predecessor once, safely refresh, and
   // retry with this successor without changing account authority.
   accessToken = token;
+  notifyAccessTokenListeners();
 }
 
 export function getAccessToken(): string | null {

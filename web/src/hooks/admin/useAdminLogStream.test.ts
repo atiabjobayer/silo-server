@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setAccessToken } from "@/api/client";
 import {
   applyAdminLogAppend,
   applyAdminLogAppends,
   buildAdminLogStreamQuery,
   buildAdminLogStreamUrl,
+  useAdminLogStream,
 } from "./useAdminLogStream";
 
 describe("buildAdminLogStreamQuery", () => {
@@ -44,6 +47,58 @@ describe("buildAdminLogStreamUrl", () => {
     ).toBe(
       "wss://example.com/api/v1/admin/logs/ws?stream=audit&playback_session_id=playback-123&request_id=req-9&token=token-123",
     );
+  });
+});
+
+describe("useAdminLogStream", () => {
+  const createdUrls: string[] = [];
+
+  class MockWebSocket {
+    static instances: MockWebSocket[] = [];
+    public onopen?: () => void;
+    public onmessage?: (event: MessageEvent) => void;
+    public onerror?: () => void;
+    public onclose?: () => void;
+    public readyState = 0;
+
+    constructor(url: string) {
+      createdUrls.push(url);
+      MockWebSocket.instances.push(this);
+    }
+
+    close() {
+      this.readyState = 3;
+      this.onclose?.(new Event("close"));
+    }
+  }
+
+  beforeEach(() => {
+    createdUrls.length = 0;
+    MockWebSocket.instances = [];
+    setAccessToken(null);
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", MockWebSocket as unknown as typeof WebSocket);
+  });
+
+  afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("reconnects when the access token becomes available", () => {
+    const { rerender } = renderHook(() => useAdminLogStream("app", {}, true));
+    vi.advanceTimersByTime(250);
+
+    expect(createdUrls).toHaveLength(1);
+    expect(createdUrls[0]).not.toContain("token=");
+
+    setAccessToken("token-123");
+    rerender();
+    vi.advanceTimersByTime(250);
+
+    expect(createdUrls).toHaveLength(2);
+    expect(createdUrls[1]).toContain("token=token-123");
   });
 });
 
