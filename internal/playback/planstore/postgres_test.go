@@ -60,6 +60,17 @@ func newPlanstoreFixture(t *testing.T) *planstoreFixture {
 	if !hasRevision {
 		t.Skip("test database has not applied the playback v3 attempt revision migration")
 	}
+	var hasFrozenRecipe bool
+	if err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'playback_v3_attempts' AND column_name = 'frozen_recipe'
+		)`).Scan(&hasFrozenRecipe); err != nil {
+		t.Fatalf("check frozen_recipe column: %v", err)
+	}
+	if !hasFrozenRecipe {
+		t.Skip("test database has not applied the playback v3 frozen recipe migration")
+	}
 
 	f := &planstoreFixture{pool: pool}
 	unique := fmt.Sprintf("planstore-test-%d", time.Now().UnixNano())
@@ -115,6 +126,10 @@ func (f *planstoreFixture) attemptRecord(sessionID, attemptID, digest string) pl
 			DecisionReason:       "direct_play",
 			RequestedMediaFileID: f.mediaFileID,
 			EffectiveMediaFileID: f.mediaFileID,
+		},
+		FrozenRecipe: playback.ExecutableRecipeV3{
+			Version: 1, PlanID: "plan-1", PlayMethod: playback.PlayDirect,
+			SubtitleTrackIndex: -1, SubtitleTransportTrackIndex: -1,
 		},
 		NormalizedRequest: playback.StartRequestV3{
 			ProtocolVersion:   3,
@@ -265,6 +280,9 @@ func TestPostgresPlanStore(t *testing.T) {
 			if !bytes.Equal(mustJSON(t, got.CurrentPlan), mustJSON(t, record.CurrentPlan)) {
 				t.Fatalf("%s plan JSON did not round-trip:\n got %s\nwant %s", name, mustJSON(t, got.CurrentPlan), mustJSON(t, record.CurrentPlan))
 			}
+			if !bytes.Equal(mustJSON(t, got.FrozenRecipe), mustJSON(t, record.FrozenRecipe)) {
+				t.Fatalf("%s frozen recipe did not round-trip:\n got %s\nwant %s", name, mustJSON(t, got.FrozenRecipe), mustJSON(t, record.FrozenRecipe))
+			}
 			if !bytes.Equal(mustJSON(t, got.NormalizedRequest), mustJSON(t, record.NormalizedRequest)) {
 				t.Fatalf("%s normalized request JSON did not round-trip", name)
 			}
@@ -400,6 +418,7 @@ func TestPostgresPlanStore(t *testing.T) {
 		updated.CurrentPlanID = "plan-2"
 		updated.CurrentReplanRequestID = "rq-1"
 		updated.CurrentPlan.PlanID = "plan-2"
+		updated.FrozenRecipe.PlanID = "plan-2"
 		updated.CurrentPlan.EffectiveMediaFileID = f.altFileID
 		updated.CurrentPlan.DecisionReason = "transcode_fallback"
 		updated.ExpiresAt = time.Now().Add(2 * time.Hour).UTC().Truncate(time.Microsecond)
@@ -424,6 +443,9 @@ func TestPostgresPlanStore(t *testing.T) {
 		}
 		if !bytes.Equal(mustJSON(t, got.CurrentPlan), mustJSON(t, updated.CurrentPlan)) {
 			t.Fatalf("plan JSON mismatch after replan:\n got %s\nwant %s", mustJSON(t, got.CurrentPlan), mustJSON(t, updated.CurrentPlan))
+		}
+		if !bytes.Equal(mustJSON(t, got.FrozenRecipe), mustJSON(t, updated.FrozenRecipe)) {
+			t.Fatalf("frozen recipe mismatch after replan:\n got %s\nwant %s", mustJSON(t, got.FrozenRecipe), mustJSON(t, updated.FrozenRecipe))
 		}
 
 		// The migration's sync trigger must not fight the in-transaction CAS:
