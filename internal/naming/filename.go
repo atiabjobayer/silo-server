@@ -17,8 +17,11 @@ var (
 	// titleYearRe matches "Title (Year)" with optional trailing content.
 	titleYearRe = regexp.MustCompile(`^(.+?)\s*\((\d{4})\)`)
 
-	// seasonEpisodeRe matches S01E01 or s01e05 patterns in filenames.
-	seasonEpisodeRe = regexp.MustCompile(`(?i)[Ss](\d{1,4})[Ee](\d{1,3})`)
+	// seasonEpisodeRe matches S01E01, s01e05, or S4.5E00 patterns in filenames.
+	// An optional decimal suffix on the season number (e.g. S4.5 for specials
+	// placed between whole seasons) is consumed but not captured; the season
+	// number stored is the integer floor.
+	seasonEpisodeRe = regexp.MustCompile(`(?i)[Ss](\d{1,4})(?:\.\d{1,2})?[Ee](\d{1,3})`)
 
 	// seasonEpisodeXRe matches NxNN patterns in filenames (e.g. 7x13, 10X01).
 	// Deliberately requires non-digit boundaries to avoid capturing resolution
@@ -35,9 +38,9 @@ var (
 	airDateRe = regexp.MustCompile(`(?:^|[^0-9])((?:19|20)\d{2})[-._ ]([01]\d)[-._ ]([0-3]\d)(?:[^0-9]|$)`)
 
 	// seasonDirRe matches "Season XX" directory names, optionally followed by
-	// trailing text (e.g. "Season 01 - Arc 01 - Romance Dawn"). The season
-	// number is captured in group 1.
-	seasonDirRe = regexp.MustCompile(`(?i)^Season\s+(\d{1,4})(?:\s.*)?$`)
+	// a fractional part (Season 4.5) and/or trailing text (e.g. "Season 01 -
+	// Arc 01 - Romance Dawn"). The season number is captured in group 1.
+	seasonDirRe = regexp.MustCompile(`(?i)^Season\s+(\d{1,4})(?:\.\d{1,2})?(?:\s.*)?$`)
 
 	// numericSeasonDirRe matches numeric-only season directories like "01".
 	numericSeasonDirRe = regexp.MustCompile(`^\d{1,4}$`)

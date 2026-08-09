@@ -164,6 +164,15 @@ func TestParseFilename(t *testing.T) {
 			wantEp:     1,
 		},
 		{
+			name:       "fractional season S4.5E00 with specials dir",
+			path:       "/tv/Doctor Who (2005)/Season 4.5 (Special)/Doctor Who S4.5E00 Special-The Next Doctor 1080p BluRay x265 HEVC 10bit ESub-MsM.strm",
+			wantTitle:  "Doctor Who",
+			wantYear:   2005,
+			wantType:   "series",
+			wantSeason: 4,
+			wantEp:     0,
+		},
+		{
 			name:        "movie library episode token folder is movie",
 			path:        "/movies/s01e03 (2020) {imdb-tt12261772} {tmdb-588077}/s01e03 (2020).mkv",
 			libraryType: "movies",

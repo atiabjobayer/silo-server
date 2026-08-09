@@ -14,9 +14,9 @@ var (
 	inferTitleYearRe       = regexp.MustCompile(`^(.+?)\s*\((\d{4})\)`)
 	inferWhitespaceTokenRe = regexp.MustCompile(`\s+`)
 	inferReleaseTokenRe    = regexp.MustCompile(`(?i)\b(?:remux|bluray|bdrip|brrip|web[ ._-]?dl|webrip|hdr|dv|2160p|1080p|720p|x264|x265|h\.?264|h\.?265|hevc|av1|aac|dts|truehd|atmos|eac3|ac3|flac|opus|mp3|ddp?5\.1|ddp?7\.1|ddp?2\.0)\b`)
-	inferSeasonEpisodeRe   = regexp.MustCompile(`(?i)[Ss](\d{1,4})[Ee](\d{1,3})`)
+	inferSeasonEpisodeRe   = regexp.MustCompile(`(?i)[Ss](\d{1,4})(?:\.\d{1,2})?[Ee](\d{1,3})`)
 	inferSeasonEpisodeXRe  = regexp.MustCompile(`(?i)(?:^|[^0-9])(\d{1,4})\s*[x×]\s*(\d{1,3})(?:[^0-9]|$)`)
-	inferSeasonDirRe       = regexp.MustCompile(`(?i)^Season\s+(\d{1,4})(?:\s.*)?$`)
+	inferSeasonDirRe       = regexp.MustCompile(`(?i)^Season\s+(\d{1,4})(?:\.\d{1,2})?(?:\s.*)?$`)
 	inferNumericSeasonRe   = regexp.MustCompile(`^\d{1,4}$`)
 	inferSpecialsDirRe     = regexp.MustCompile(`(?i)^(?:specials?|extras?)$`)
 	// Matches a well-formed tag ([tvdb-81189]), an unsubstituted Sonarr token
