@@ -68,7 +68,7 @@ describe("useAdminLogStream", () => {
 
     close() {
       this.readyState = 3;
-      this.onclose?.({} as Event);
+      this.onclose?.();
     }
   }
 
