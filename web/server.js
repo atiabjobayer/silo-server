@@ -64,6 +64,7 @@ function proxyRequest(req, res, targetUrl) {
   delete options.headers?.connection;
 
   const proxyReq = http.request(options, (proxyRes) => {
+    console.log(`proxy ${req.method} ${req.url} → ${proxyRes.statusCode}`);
     res.writeHead(proxyRes.statusCode || 500, proxyRes.headers);
     proxyRes.pipe(res);
   });
@@ -148,6 +149,23 @@ server.on("upgrade", (req, socket, head) => {
   proxyReq.on("error", (err) => {
     console.error("ws proxy error:", err.message);
     socket.destroy();
+  });
+
+  // If the backend doesn't upgrade (e.g. returns 401), forward the response
+  // as a plain HTTP response so the browser gets a meaningful status code
+  // instead of a silent connection close.
+  proxyReq.on("response", (proxyRes) => {
+    console.log("ws backend refused upgrade:", proxyRes.statusCode);
+    socket.write(
+      `HTTP/${proxyRes.httpVersion} ${proxyRes.statusCode} ${proxyRes.statusMessage}\r\n`,
+    );
+    for (const [key, value] of Object.entries(proxyRes.headers)) {
+      if (key && value) {
+        socket.write(`${key}: ${Array.isArray(value) ? value.join(", ") : value}\r\n`);
+      }
+    }
+    socket.write("Connection: close\r\n\r\n");
+    proxyRes.pipe(socket);
   });
 
   proxyReq.on("upgrade", (proxyRes, proxySocket, proxyHead) => {
