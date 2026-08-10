@@ -9,6 +9,12 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 COPY web/ .
 RUN pnpm run build
 
+# Simple Node.js proxy that serves the built SPA and forwards /api/ requests
+# plus WebSocket upgrades to the Go backend. Replaces vite preview so the
+# proxy config in vite.config.ts actually works at runtime.
+COPY web/server.js ./server.js
+CMD ["node", "server.js"]
+
 # Allow CI to inject prebuilt frontend assets via a named `frontend_dist`
 # context while local builds keep using the in-Docker frontend stage.
 FROM scratch AS frontend_dist
