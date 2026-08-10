@@ -122,24 +122,46 @@ server.on("upgrade", (req, socket, head) => {
     return;
   }
 
+  console.log("ws upgrade request:", urlPath);
+
   const url = new URL(urlPath, API_TARGET);
   const options = {
     hostname: url.hostname,
     port: url.port,
     path: url.pathname + url.search,
     method: "GET",
+    // Disable connection pooling so the upgrade isn't absorbed.
+    agent: false,
     headers: {
+      // Forward all client headers...
       ...req.headers,
-      // Keep Upgrade + Connection for the WebSocket handshake; drop host so
-      // the backend sees its own name.
-      host: undefined,
+      // ...then overwrite host so the backend sees its own name...
+      host: url.hostname + (url.port ? ":" + url.port : ""),
+      // ...and pin the connection + upgrade headers so Node's HTTP client
+      // doesn't replace them with keep-alive.
+      connection: "Upgrade",
+      upgrade: "websocket",
     },
   };
 
   const proxyReq = http.request(options);
-  proxyReq.on("error", () => socket.destroy());
+  proxyReq.on("error", (err) => {
+    console.error("ws proxy error:", err.message);
+    socket.destroy();
+  });
 
   proxyReq.on("upgrade", (proxyRes, proxySocket, proxyHead) => {
+    console.log("ws upgrade OK:", proxyRes.statusCode);
+    // Clean up the other end when either side closes.
+    proxySocket.on("error", (err) => {
+      console.error("ws proxy socket error:", err.message);
+      socket.destroy();
+    });
+    socket.on("error", (err) => {
+      console.error("ws client socket error:", err.message);
+      proxySocket.destroy();
+    });
+
     // Write the 101 Switching Protocols response back to the client.
     socket.write(
       `HTTP/${proxyRes.httpVersion} ${proxyRes.statusCode} ${proxyRes.statusMessage}\r\n`,
