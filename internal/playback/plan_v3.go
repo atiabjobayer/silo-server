@@ -26,13 +26,13 @@ const (
 )
 
 type PlannerInputV3 struct {
-	Request         StartRequestV3
-	RequestedFile   *models.MediaFile
-	EffectiveFile   *models.MediaFile
-	AudioTrackIndex int
-	Settings        PlannerSettingsV3
-	Registry *TransformationRegistryV3
-	HLSRegistry func() *TransformationRegistryV3
+	Request             StartRequestV3
+	RequestedFile       *models.MediaFile
+	EffectiveFile       *models.MediaFile
+	AudioTrackIndex     int
+	Settings            PlannerSettingsV3
+	Registry            *TransformationRegistryV3
+	HLSRegistry         func() *TransformationRegistryV3
 	DVRPUStrippable     func() bool
 	Now                 time.Time
 	AttemptedKeys       []string
@@ -50,8 +50,8 @@ func (input PlannerInputV3) dvRPUStrippable() bool {
 }
 
 func (input PlannerInputV3) hlsRegistry() *TransformationRegistryV3 {
-	if input.HLSRegistry \!= nil {
-		if widened := input.HLSRegistry(); widened \!= nil {
+	if input.HLSRegistry != nil {
+		if widened := input.HLSRegistry(); widened != nil {
 			return widened
 		}
 	}
@@ -59,12 +59,12 @@ func (input PlannerInputV3) hlsRegistry() *TransformationRegistryV3 {
 }
 
 type PlannerResultV3 struct {
-	Plan             *PlanV3
-	Terminal         *TerminalV3
-	PlayMethod       PlayMethod
-	TranscodeAudio   bool
-	TargetVideoCodec string
-	TargetAudioCodec string
+	Plan                        *PlanV3
+	Terminal                    *TerminalV3
+	PlayMethod                  PlayMethod
+	TranscodeAudio              bool
+	TargetVideoCodec            string
+	TargetAudioCodec            string
 	TargetAudioChannels         int
 	TargetAudioBitrateKbps      int
 	TargetResolution            string
@@ -73,8 +73,8 @@ type PlannerResultV3 struct {
 	SubtitleTransportTrackIndex int
 	SubtitleBurnIn              bool
 	SubtitleCodec               string
-	DownloadedSubtitleID int
-	FrozenSourceMetadata *SourceExecutionMetadataV3
+	DownloadedSubtitleID        int
+	FrozenSourceMetadata        *SourceExecutionMetadataV3
 }
 
 func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
@@ -93,17 +93,17 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 		return planAudioOnlyV3(input, file, source)
 	}
 	subtitle := ResolveSubtitlePolicyV3(file, input.Request, input.Settings.TranscodeEnabled, DeliveryClassOriginalHTTPV3, input.AdditionalSubtitles)
-	if subtitle.Terminal \!= nil {
+	if subtitle.Terminal != nil {
 		return PlannerResultV3{Terminal: subtitle.Terminal, SubtitleTrackIndex: -1, SubtitleTransportTrackIndex: -1}
 	}
 	remuxSubtitle := ResolveSubtitlePolicyV3(file, input.Request, input.Settings.TranscodeEnabled, DeliveryClassProgressiveV3, input.AdditionalSubtitles)
 	hlsSubtitle := ResolveSubtitlePolicyV3(file, input.Request, input.Settings.TranscodeEnabled, DeliveryClassHLSV3, input.AdditionalSubtitles)
-	remuxSubtitleOK := remuxSubtitle.Terminal == nil && \!remuxSubtitle.RequiresBurn
-	hlsRemuxSubtitleOK := hlsSubtitle.Terminal == nil && \!hlsSubtitle.RequiresBurn
+	remuxSubtitleOK := remuxSubtitle.Terminal == nil && !remuxSubtitle.RequiresBurn
+	hlsRemuxSubtitleOK := hlsSubtitle.Terminal == nil && !hlsSubtitle.RequiresBurn
 	quality := ResolveQualityPolicyV3(input.Request, source)
 	videoOK, videoEvidenceInsufficient := videoEligibleV3(source, input.Request)
 	var high10Quirk *AppliedQuirkV3
-	if \!videoOK {
+	if !videoOK {
 		if quirk, ok := high10DecodeOverrideV3(source, input.Request); ok {
 			videoOK = true
 			high10Quirk = quirk
@@ -111,7 +111,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	}
 	rangeOK, videoClaims := outputRangeEligibleV3(source, input.Request)
 	audioOK, passthrough, audioClaims := audioEligibilityV3(source, input.Request)
-	if \!audioOK && source.AudioCodec == "" && (file == nil || len(file.AudioTracks) == 0) {
+	if !audioOK && source.AudioCodec == "" && (file == nil || len(file.AudioTracks) == 0) {
 		audioOK = true
 		audioClaims.Reason = "no_audio_track"
 	}
@@ -119,18 +119,18 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	hlsDeliveryOK := deliveryAvailableV3(input.Request, DeliveryClassHLSV3)
 	dvStripEligibleLocal := canStripDolbyVisionToHDR10V3(source, input.Request, input.Registry)
 	dvStripEligible := dvStripEligibleLocal
-	if \!dvStripEligible && hlsDeliveryOK && source.DynamicRange == DynamicRangeDolbyVisionV3 {
+	if !dvStripEligible && hlsDeliveryOK && source.DynamicRange == DynamicRangeDolbyVisionV3 {
 		dvStripEligible = canStripDolbyVisionToHDR10V3(source, input.Request, input.hlsRegistry())
 	}
 	dvStripUnsupportedBySource := false
-	if dvStripEligible && \!input.dvRPUStrippable() {
+	if dvStripEligible && !input.dvRPUStrippable() {
 		dvStripUnsupportedBySource = true
 		dvStripEligible = false
 		dvStripEligibleLocal = false
 	}
 	clientDV81Eligible := canClientTransformDV7ToDV81V3(source, input.Request)
 	clientHDR10Eligible := canClientTransformDV7ToHDR10V3(source, input.Request)
-	if dvStripUnsupportedBySource && \!rangeOK && \!clientDV81Eligible && \!clientHDR10Eligible {
+	if dvStripUnsupportedBySource && !rangeOK && !clientDV81Eligible && !clientHDR10Eligible {
 		return terminalPlannerResultV3(TerminalDVConversionUnsupportedV3,
 			"This source's Dolby Vision metadata cannot be removed cleanly, and this device cannot play the source as it is.", false)
 	}
@@ -167,19 +167,19 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 			Message: "This source's Dolby Vision metadata cannot be removed cleanly, so the validated HDR10 route is unavailable for it.",
 		})
 	}
-	if \!routeVideoMetadataCompleteV3(source) {
+	if !routeVideoMetadataCompleteV3(source) {
 		return terminalPlannerResultV3("source_metadata_incomplete", "The source is missing video metadata required for a validated playback route.", true)
 	}
-	if \!videoOK && videoEvidenceInsufficient {
+	if !videoOK && videoEvidenceInsufficient {
 		base.DegradationWarnings = append(base.DegradationWarnings, DegradationWarningV3{
 			Code:    EvidenceInsufficientForDirectV3,
 			Message: "The client's capability evidence tier cannot validate this stream for a direct route; an adapted route is used instead.",
 		})
 	}
 
-	if quality.RequiresTranscode && \!quality.ExplicitRung && \!subtitle.RequiresBurn && videoOK &&
+	if quality.RequiresTranscode && !quality.ExplicitRung && !subtitle.RequiresBurn && videoOK &&
 		(rangeOK || dvStripEligible || clientDV81Eligible || clientHDR10Eligible) &&
-		\!videoTranscodeExecutableV3(input, source) {
+		!videoTranscodeExecutableV3(input, source) {
 		warnings := append(quality.Warnings, DegradationWarningV3{
 			Code:    "quality_reduction_unavailable",
 			Message: "Reduced-quality transcoding is unavailable for this source; it is delivered at original quality.",
@@ -189,18 +189,18 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 	}
 	base.DegradationWarnings = append(base.DegradationWarnings, quality.Warnings...)
 
-	if quality.RequiresTranscode || \!videoOK ||
-		(\!rangeOK && \!dvStripEligible && \!clientDV81Eligible && \!clientHDR10Eligible) ||
-		(subtitle.RequiresBurn && \!remuxSubtitleOK && \!hlsRemuxSubtitleOK) {
+	if quality.RequiresTranscode || !videoOK ||
+		(!rangeOK && !dvStripEligible && !clientDV81Eligible && !clientHDR10Eligible) ||
+		(subtitle.RequiresBurn && !remuxSubtitleOK && !hlsRemuxSubtitleOK) {
 		reasonOverride := ""
-		if \!quality.RequiresTranscode && \!videoOK && videoEvidenceInsufficient {
+		if !quality.RequiresTranscode && !videoOK && videoEvidenceInsufficient {
 			reasonOverride = EvidenceInsufficientForDirectV3
 		}
 		return planVideoTranscodeV3(input, base, source, quality, hlsSubtitle, reasonOverride)
 	}
 
 	if source.DVProfile == 7 && quality.PreservesSource && videoOK && containerOK && audioOK &&
-		audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && \!subtitle.RequiresBurn {
+		audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && !subtitle.RequiresBurn {
 		if clientDV81Eligible {
 			plan := base
 			plan.Delivery = DeliveryOriginalHTTPV3
@@ -217,7 +217,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 				Message: "Dolby Vision Profile 7 is played as Profile 8.1 base-layer Dolby Vision; enhancement-layer pixel data is discarded.",
 			})
 			finalizePlanIdentityV3(&plan, input.Request.PlaybackAttemptID, input.Request.ClientPlaybackContext.Output.OutputContextID)
-			if deliverySupportsPlanV3(input.Request, DeliveryClassOriginalHTTPV3, plan) && \!planAttemptedV3(plan, input.Request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
+			if deliverySupportsPlanV3(input.Request, DeliveryClassOriginalHTTPV3, plan) && !planAttemptedV3(plan, input.Request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
 				return PlannerResultV3{Plan: &plan, PlayMethod: PlayDirect, SubtitleTrackIndex: subtitle.SelectedIndex, SubtitleTransportTrackIndex: subtitle.TransportIndex, SubtitleCodec: subtitle.Codec, DownloadedSubtitleID: subtitle.DownloadedSubtitleID}
 			}
 		}
@@ -237,38 +237,38 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 				Message: "Dolby Vision Profile 7 is played from the same 4K file as its HDR10 base layer.",
 			})
 			finalizePlanIdentityV3(&plan, input.Request.PlaybackAttemptID, input.Request.ClientPlaybackContext.Output.OutputContextID)
-			if deliverySupportsPlanV3(input.Request, DeliveryClassOriginalHTTPV3, plan) && \!planAttemptedV3(plan, input.Request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
+			if deliverySupportsPlanV3(input.Request, DeliveryClassOriginalHTTPV3, plan) && !planAttemptedV3(plan, input.Request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
 				return PlannerResultV3{Plan: &plan, PlayMethod: PlayDirect, SubtitleTrackIndex: subtitle.SelectedIndex, SubtitleTransportTrackIndex: subtitle.TransportIndex, SubtitleCodec: subtitle.Codec, DownloadedSubtitleID: subtitle.DownloadedSubtitleID}
 			}
 		}
 	}
 
-	if source.DVProfile \!= 7 && deliveryAvailableV3(input.Request, DeliveryClassOriginalHTTPV3) && containerOK && videoOK && rangeOK && audioOK && quality.PreservesSource &&
-		audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && \!subtitle.RequiresBurn {
+	if source.DVProfile != 7 && deliveryAvailableV3(input.Request, DeliveryClassOriginalHTTPV3) && containerOK && videoOK && rangeOK && audioOK && quality.PreservesSource &&
+		audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && !subtitle.RequiresBurn {
 		plan := base
 		plan.Delivery = DeliveryOriginalHTTPV3
 		plan.Stream = StreamV3{Protocol: StreamHTTPProgressiveV3, Container: source.Container, MIMEType: MimeFromExtension(file.FilePath), Headers: map[string]string{}, HeaderRefresh: HeaderRefreshNoneV3}
 		plan.DecisionReason = "validated_original_playback"
 		applyCopiedVideoQuirksV3(&plan, source, input.Request, high10Quirk)
 		finalizePlanIdentityV3(&plan, input.Request.PlaybackAttemptID, input.Request.ClientPlaybackContext.Output.OutputContextID)
-		if deliverySupportsPlanV3(input.Request, DeliveryClassOriginalHTTPV3, plan) && \!planAttemptedV3(plan, input.Request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
+		if deliverySupportsPlanV3(input.Request, DeliveryClassOriginalHTTPV3, plan) && !planAttemptedV3(plan, input.Request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
 			return PlannerResultV3{Plan: &plan, PlayMethod: PlayDirect, SubtitleTrackIndex: subtitle.SelectedIndex, SubtitleTransportTrackIndex: subtitle.TransportIndex, SubtitleCodec: subtitle.Codec, DownloadedSubtitleID: subtitle.DownloadedSubtitleID}
 		}
 	}
 
-	remuxRangeOK := rangeOK && source.DVProfile \!= 7
-	if videoOK && \!source.VideoCopyUnsafe && (remuxRangeOK || dvStripEligible) && (remuxSubtitleOK || hlsRemuxSubtitleOK) {
+	remuxRangeOK := rangeOK && source.DVProfile != 7
+	if videoOK && !source.VideoCopyUnsafe && (remuxRangeOK || dvStripEligible) && (remuxSubtitleOK || hlsRemuxSubtitleOK) {
 		plan := base
 		plan.Delivery = DeliveryRemuxProgressiveV3
 		plan.Stream = StreamV3{Protocol: StreamHTTPProgressiveV3, Container: containerMP4V3, MIMEType: mimeVideoMP4V3, Headers: map[string]string{}, HeaderRefresh: HeaderRefreshNoneV3}
 		plan.DecisionReason = "container_normalization"
-		transcodeAudio := \!audioOK
+		transcodeAudio := !audioOK
 		progressiveAudioChannels := 0
-		localAudioConvertOK := input.Registry \!= nil && input.Registry.Available(TransformationAudioToAACV3)
+		localAudioConvertOK := input.Registry != nil && input.Registry.Available(TransformationAudioToAACV3)
 		if transcodeAudio {
 			audioConvertOK := localAudioConvertOK ||
 				hlsDeliveryOK && input.hlsRegistry().Available(TransformationAudioToAACV3)
-			if \!audioConvertOK {
+			if !audioConvertOK {
 				return terminalPlannerResultV3(TerminalAudioConversionUnsupportedV3, "The required validated AAC conversion toolchain is unavailable.", true)
 			}
 			progressiveAudioChannels = aacOutputChannelsV3(input.Request, DeliveryClassProgressiveV3, source.AudioChannels, false)
@@ -280,22 +280,22 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 			plan.DegradationWarnings = append(plan.DegradationWarnings, DegradationWarningV3{Code: degradationAudioConvertedV3, Message: fmt.Sprintf("The selected audio track is converted to AAC %s.", audioLayoutForChannelsV3(progressiveAudioChannels))})
 			plan.DecisionReason = "audio_adaptation"
 		}
-		dvStrip := dvStripEligible && (source.DVProfile == 7 || \!rangeOK)
+		dvStrip := dvStripEligible && (source.DVProfile == 7 || !rangeOK)
 		if dvStrip {
 			plan.Transformations = append(plan.Transformations, TransformationV3{Name: TransformationServerDV7HDR10V3, Executor: ExecutorServerV3, RecipeVersion: "1", ValidatedClaims: DV7ToHDR10ClaimsV3()})
 			plan.EffectiveRecipe.DynamicRange = DynamicRangeHDR10V3
 			plan.Claims.Video = VideoClaimsV3{HDR10: true}
 			plan.DegradationWarnings = append(plan.DegradationWarnings, DegradationWarningV3{Code: "dolby_vision_removed", Message: "Dolby Vision metadata is removed and the validated HDR10 base layer is preserved."})
 		}
-		if \!dvStrip {
+		if !dvStrip {
 			applyCopiedVideoQuirksV3(&plan, source, input.Request, high10Quirk)
 		}
-		progressiveExecutable := (\!transcodeAudio || localAudioConvertOK) && (\!dvStrip || dvStripEligibleLocal)
+		progressiveExecutable := (!transcodeAudio || localAudioConvertOK) && (!dvStrip || dvStripEligibleLocal)
 		if remuxSubtitleOK && progressiveExecutable {
 			applySubtitleDecisionV3(&plan, remuxSubtitle.Decision)
 			plan.Claims.Subtitles = remuxSubtitle.Claims
 			finalizePlanIdentityV3(&plan, input.Request.PlaybackAttemptID, input.Request.ClientPlaybackContext.Output.OutputContextID)
-			if deliverySupportsPlanV3(input.Request, DeliveryClassProgressiveV3, plan) && \!planAttemptedV3(plan, input.Request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
+			if deliverySupportsPlanV3(input.Request, DeliveryClassProgressiveV3, plan) && !planAttemptedV3(plan, input.Request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
 				return PlannerResultV3{Plan: &plan, PlayMethod: PlayRemux, TranscodeAudio: transcodeAudio, TargetAudioCodec: plan.EffectiveRecipe.AudioCodec, TargetAudioChannels: progressiveAudioChannels, SubtitleTrackIndex: remuxSubtitle.SelectedIndex, SubtitleTransportTrackIndex: remuxSubtitle.TransportIndex, SubtitleCodec: remuxSubtitle.Codec, DownloadedSubtitleID: remuxSubtitle.DownloadedSubtitleID}
 			}
 		}
@@ -311,8 +311,8 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 				plan.EffectiveRecipe.AudioChannels = intPointerV3(hlsAudioChannels)
 				plan.EffectiveRecipe.AudioLayout = audioLayoutForChannelsV3(hlsAudioChannels)
 			}
-			if audioQuirk, ok := hlsEAC3AudioCorrectionV3(source, input.Request); ok && \!hlsTranscodeAudio {
-				if \!input.hlsRegistry().Available(TransformationAudioToAACV3) {
+			if audioQuirk, ok := hlsEAC3AudioCorrectionV3(source, input.Request); ok && !hlsTranscodeAudio {
+				if !input.hlsRegistry().Available(TransformationAudioToAACV3) {
 					return terminalPlannerResultV3(TerminalAudioConversionUnsupportedV3, "The device-specific HLS route requires the validated AAC conversion toolchain.", true)
 				}
 				hlsTranscodeAudio = true
@@ -325,8 +325,8 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 				plan.DegradationWarnings = append(plan.DegradationWarnings, DegradationWarningV3{Code: degradationAudioConvertedV3, Message: fmt.Sprintf("The selected audio track is converted to AAC %s for this device's HLS route.", audioLayoutForChannelsV3(hlsAudioChannels))})
 				appendAppliedQuirkV3(&plan, *audioQuirk, "")
 			}
-			if \!hlsTranscodeAudio && \!hlsNativeAudioCodecV3(source.AudioCodec) {
-				if \!input.hlsRegistry().Available(TransformationAudioToAACV3) {
+			if !hlsTranscodeAudio && !hlsNativeAudioCodecV3(source.AudioCodec) {
+				if !input.hlsRegistry().Available(TransformationAudioToAACV3) {
 					return terminalPlannerResultV3(TerminalAudioConversionUnsupportedV3, "The HLS route requires the validated AAC conversion toolchain.", true)
 				}
 				hlsTranscodeAudio = true
@@ -338,7 +338,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 				plan.Transformations = append(plan.Transformations, TransformationV3{Name: TransformationAudioToAACV3, Executor: ExecutorServerV3, RecipeVersion: "1", ValidatedClaims: []string{ClaimAudioDecodeV3}})
 				plan.DegradationWarnings = append(plan.DegradationWarnings, DegradationWarningV3{Code: degradationAudioConvertedV3, Message: "The selected audio track is converted to AAC for HLS delivery."})
 			}
-			if \!dvStrip {
+			if !dvStrip {
 				applyCopiedVideoQuirksV3(&plan, source, input.Request, high10Quirk)
 			}
 			if hlsTranscodeAudio {
@@ -349,7 +349,7 @@ func PlanPlaybackV3(input PlannerInputV3) PlannerResultV3 {
 			applySubtitleDecisionV3(&plan, hlsSubtitle.Decision)
 			plan.Claims.Subtitles = hlsSubtitle.Claims
 			finalizePlanIdentityV3(&plan, input.Request.PlaybackAttemptID, input.Request.ClientPlaybackContext.Output.OutputContextID)
-			if deliverySupportsPlanV3(input.Request, DeliveryClassHLSV3, plan) && \!planAttemptedV3(plan, input.Request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
+			if deliverySupportsPlanV3(input.Request, DeliveryClassHLSV3, plan) && !planAttemptedV3(plan, input.Request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
 				targetAudio := "copy"
 				if hlsTranscodeAudio {
 					targetAudio = "aac"
@@ -382,10 +382,10 @@ func availableQualitiesV3(input PlannerInputV3, source SourceDescriptorV3) []Ava
 	if source.Height <= 0 {
 		return qualities
 	}
-	if \!deliveryAvailableV3(input.Request, DeliveryClassHLSV3) || \!input.Settings.TranscodeEnabled {
+	if !deliveryAvailableV3(input.Request, DeliveryClassHLSV3) || !input.Settings.TranscodeEnabled {
 		return qualities
 	}
-	if is4KSourceV3(input.EffectiveFile, source) && \!input.Settings.Allow4KTranscode {
+	if is4KSourceV3(input.EffectiveFile, source) && !input.Settings.Allow4KTranscode {
 		return qualities
 	}
 	if hdrTranscodeUnavailableV3(source) {
@@ -419,11 +419,11 @@ func planAudioOnlyV3(input PlannerInputV3, file *models.MediaFile, source Source
 		return terminalPlannerResultV3("source_metadata_incomplete", "The source is missing audio metadata required for a validated playback route.", true)
 	}
 	base := PlanV3{
-		ProtocolVersion: ProtocolV3,
-		ExpiresAt:       NewPlanExpiryV3(input.Now),
-		SelectedTracks:  selectedTracksForPlanV3(file, input.AudioTrackIndex, SubtitlePolicyResultV3{SelectedIndex: -1, TransportIndex: -1}),
-		EffectiveRecipe: recipeFromSourceV3(source),
-		Claims:          ValidationClaimsV3{Audio: audioClaims},
+		ProtocolVersion:        ProtocolV3,
+		ExpiresAt:              NewPlanExpiryV3(input.Now),
+		SelectedTracks:         selectedTracksForPlanV3(file, input.AudioTrackIndex, SubtitlePolicyResultV3{SelectedIndex: -1, TransportIndex: -1}),
+		EffectiveRecipe:        recipeFromSourceV3(source),
+		Claims:                 ValidationClaimsV3{Audio: audioClaims},
 		Subtitle:               SubtitleDecisionV3{Mode: SubtitleOffV3, Inventory: []SubtitleInventoryItemV3{}},
 		Transformations:        []TransformationV3{},
 		AppliedQuirks:          []AppliedQuirkV3{},
@@ -437,21 +437,21 @@ func planAudioOnlyV3(input PlannerInputV3, file *models.MediaFile, source Source
 		Timeline:               TimelineV3{SourceStartSeconds: floatOrZeroV3(request.StartPosition), PlayerStartSeconds: floatOrZeroV3(request.StartPosition), CanSeekAnywhere: true, SeekRestoration: "player_position"},
 	}
 	containerOK := containsFoldV3(request.Capabilities.Containers, source.Container)
-	if audioOK && containerOK && \!bandwidthCapExceeded && audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && deliveryAvailableV3(request, DeliveryClassOriginalHTTPV3) {
+	if audioOK && containerOK && !bandwidthCapExceeded && audioSelectionUsesContainerDefaultV3(file, input.AudioTrackIndex) && deliveryAvailableV3(request, DeliveryClassOriginalHTTPV3) {
 		plan := base
 		plan.Delivery = DeliveryOriginalHTTPV3
 		plan.Stream = StreamV3{Protocol: StreamHTTPProgressiveV3, Container: source.Container, MIMEType: MimeFromExtension(file.FilePath), Headers: map[string]string{}, HeaderRefresh: HeaderRefreshNoneV3}
 		plan.DecisionReason = "validated_original_playback"
 		finalizePlanIdentityV3(&plan, request.PlaybackAttemptID, request.ClientPlaybackContext.Output.OutputContextID)
-		if deliverySupportsPlanV3(request, DeliveryClassOriginalHTTPV3, plan) && \!planAttemptedV3(plan, request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
+		if deliverySupportsPlanV3(request, DeliveryClassOriginalHTTPV3, plan) && !planAttemptedV3(plan, request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
 			return PlannerResultV3{Plan: &plan, PlayMethod: PlayDirect, SubtitleTrackIndex: -1, SubtitleTransportTrackIndex: -1}
 		}
 	}
-	if \!deliveryAvailableV3(request, DeliveryClassProgressiveV3) {
+	if !deliveryAvailableV3(request, DeliveryClassProgressiveV3) {
 		return terminalPlannerResultV3("adaptation_unavailable", "No validated playback route is available for this audio source.", false)
 	}
-	transcodeAudio := \!audioOK || bandwidthCapExceeded
-	if transcodeAudio && (input.Registry == nil || \!input.Registry.Available(TransformationAudioToAACV3)) {
+	transcodeAudio := !audioOK || bandwidthCapExceeded
+	if transcodeAudio && (input.Registry == nil || !input.Registry.Available(TransformationAudioToAACV3)) {
 		return terminalPlannerResultV3(TerminalAudioConversionUnsupportedV3, "The required validated AAC conversion toolchain is unavailable.", true)
 	}
 	plan := base
@@ -463,7 +463,7 @@ func planAudioOnlyV3(input PlannerInputV3, file *models.MediaFile, source Source
 	if transcodeAudio {
 		targetAudioBitrateKbps = audioOnlyAACBitrateKbpsV3(bandwidthCapKbps)
 		applyAudioOnlyAACConversionV3(&plan, targetAudioChannels, targetAudioBitrateKbps, bandwidthCapExceeded)
-	} else if \!deliverySupportsPlanV3(request, DeliveryClassProgressiveV3, plan) && input.Registry \!= nil && input.Registry.Available(TransformationAudioToAACV3) {
+	} else if !deliverySupportsPlanV3(request, DeliveryClassProgressiveV3, plan) && input.Registry != nil && input.Registry.Available(TransformationAudioToAACV3) {
 		converted := plan
 		targetAudioBitrateKbps = audioOnlyAACBitrateKbpsV3(bandwidthCapKbps)
 		applyAudioOnlyAACConversionV3(&converted, targetAudioChannels, targetAudioBitrateKbps, false)
@@ -472,14 +472,14 @@ func planAudioOnlyV3(input PlannerInputV3, file *models.MediaFile, source Source
 			transcodeAudio = true
 		}
 	}
-	if \!deliverySupportsPlanV3(request, DeliveryClassProgressiveV3, plan) {
+	if !deliverySupportsPlanV3(request, DeliveryClassProgressiveV3, plan) {
 		return terminalPlannerResultV3("adaptation_unavailable", "The progressive delivery cannot decode the planned audio recipe.", false)
 	}
 	finalizePlanIdentityV3(&plan, request.PlaybackAttemptID, request.ClientPlaybackContext.Output.OutputContextID)
 	if planAttemptedV3(plan, request.ClientPlaybackContext.Output.OutputContextID, input.AttemptedKeys) {
 		return terminalPlannerResultV3("adaptation_exhausted", "All compatible playback recipes have already failed for this output route.", false)
 	}
-	if \!transcodeAudio {
+	if !transcodeAudio {
 		targetAudioChannels = 0
 		targetAudioBitrateKbps = 0
 	}
@@ -498,7 +498,7 @@ func aacOutputChannelsV3(request StartRequestV3, deliveryClass string, sourceCha
 		channels = 6
 	}
 	capability, ok := request.ClientPlaybackContext.Deliveries[deliveryClass]
-	if \!ok || capability.MaxChannels == nil || *capability.MaxChannels <= 0 || channels <= *capability.MaxChannels {
+	if !ok || capability.MaxChannels == nil || *capability.MaxChannels <= 0 || channels <= *capability.MaxChannels {
 		return channels
 	}
 	if *capability.MaxChannels == 1 {
@@ -548,26 +548,26 @@ func applyAudioOnlyAACConversionV3(plan *PlanV3, targetChannels, targetBitrateKb
 }
 
 func planVideoTranscodeV3(input PlannerInputV3, base PlanV3, source SourceDescriptorV3, quality QualityResultV3, subtitle SubtitlePolicyResultV3, reasonOverride string) PlannerResultV3 {
-	if \!deliveryAvailableV3(input.Request, DeliveryClassHLSV3) {
+	if !deliveryAvailableV3(input.Request, DeliveryClassHLSV3) {
 		return terminalPlannerResultV3("client_hls_unsupported", "The client cannot execute the required HLS adaptation route.", false)
 	}
-	if subtitle.Terminal \!= nil {
+	if subtitle.Terminal != nil {
 		return PlannerResultV3{Terminal: subtitle.Terminal, SubtitleTrackIndex: -1, SubtitleTransportTrackIndex: -1}
 	}
-	if \!input.Settings.TranscodeEnabled {
+	if !input.Settings.TranscodeEnabled {
 		reason := "transcoding_disabled"
 		if subtitle.RequiresBurn {
 			reason = "subtitle_conversion_unsupported"
 		}
 		return terminalPlannerResultV3(reason, "The source requires video adaptation, but transcoding is unavailable.", false)
 	}
-	if is4KSourceV3(input.EffectiveFile, source) && \!input.Settings.Allow4KTranscode {
+	if is4KSourceV3(input.EffectiveFile, source) && !input.Settings.Allow4KTranscode {
 		return terminalPlannerResultV3("no_alternate_version", TerminalMessage4KTranscodeDisabledV3, false)
 	}
 	if hdrTranscodeUnavailableV3(source) {
 		return terminalPlannerResultV3("hdr_transcode_unsupported", "This HDR source requires video encoding, but no validated HDR-preserving or tone-map recipe is installed.", false)
 	}
-	if \!input.hlsRegistry().Available(TransformationVideoToH264V3) || \!input.hlsRegistry().Available(TransformationAudioToAACV3) {
+	if !input.hlsRegistry().Available(TransformationVideoToH264V3) || !input.hlsRegistry().Available(TransformationAudioToAACV3) {
 		return terminalPlannerResultV3("conversion_tool_unavailable", "The required validated H.264/AAC conversion toolchain is unavailable.", true)
 	}
 	plan := base
@@ -590,7 +590,7 @@ func planVideoTranscodeV3(input PlannerInputV3, base PlanV3, source SourceDescri
 	applySubtitleDecisionV3(&plan, subtitle.Decision)
 	plan.Claims.Subtitles = subtitle.Claims
 	plan.DecisionReason = quality.Reason
-	if reasonOverride \!= "" {
+	if reasonOverride != "" {
 		plan.DecisionReason = reasonOverride
 	}
 	if subtitle.RequiresBurn {
@@ -599,7 +599,7 @@ func planVideoTranscodeV3(input PlannerInputV3, base PlanV3, source SourceDescri
 	}
 	plan.EffectiveRecipe.DynamicRange = DynamicRangeSDRV3
 	plan.Claims.Video = VideoClaimsV3{}
-	if \!deliverySupportsPlanV3(input.Request, DeliveryClassHLSV3, plan) {
+	if !deliverySupportsPlanV3(input.Request, DeliveryClassHLSV3, plan) {
 		return terminalPlannerResultV3("adaptation_unavailable", "The HLS delivery cannot decode the planned transcode recipe.", false)
 	}
 	finalizePlanIdentityV3(&plan, input.Request.PlaybackAttemptID, input.Request.ClientPlaybackContext.Output.OutputContextID)
@@ -619,7 +619,7 @@ func applySubtitleDecisionV3(plan *PlanV3, decision SubtitleDecisionV3) {
 }
 
 func canStripDolbyVisionToHDR10V3(source SourceDescriptorV3, request StartRequestV3, registry *TransformationRegistryV3) bool {
-	if source.DynamicRange \!= DynamicRangeDolbyVisionV3 || \!clientSupportsHDR10V3(request) || registry == nil || \!registry.Available(TransformationServerDV7HDR10V3) {
+	if source.DynamicRange != DynamicRangeDolbyVisionV3 || !clientSupportsHDR10V3(request) || registry == nil || !registry.Available(TransformationServerDV7HDR10V3) {
 		return false
 	}
 	return source.DVProfile == 7 || source.DVProfile == 8 && source.DVBLCompatID == 1
@@ -641,15 +641,15 @@ func clientSupportsDVProfileV3(request StartRequestV3, profile int) bool {
 	if hdr == nil {
 		hdr = request.Capabilities.HDRDetails
 	}
-	return hdr \!= nil && containsIntV3(hdr.DolbyVisionProfiles, profile)
+	return hdr != nil && containsIntV3(hdr.DolbyVisionProfiles, profile)
 }
 
 func clientTransformationAvailableV3(request StartRequestV3, name, version string) bool {
-	if \!HasFeatureV3(request.ClientFeatures, FeatureClientVideoTransforms) {
+	if !HasFeatureV3(request.ClientFeatures, FeatureClientVideoTransforms) {
 		return false
 	}
 	delivery, ok := request.ClientPlaybackContext.Deliveries[DeliveryClassOriginalHTTPV3]
-	if \!ok || \!delivery.Enabled || \!delivery.SupportedOnDevice {
+	if !ok || !delivery.Enabled || !delivery.SupportedOnDevice {
 		return false
 	}
 	for _, transformation := range delivery.Transformations {
@@ -662,7 +662,7 @@ func clientTransformationAvailableV3(request StartRequestV3, name, version strin
 
 func is4KSourceV3(file *models.MediaFile, source SourceDescriptorV3) bool {
 	resolution := ""
-	if file \!= nil {
+	if file != nil {
 		resolution = strings.ToLower(strings.TrimSpace(file.Resolution))
 	}
 	return resolution == "2160p" || resolution == "4k" || resolution == "uhd" || source.Width >= 3840 || source.Height >= 2160
@@ -675,9 +675,9 @@ type QualityResultV3 struct {
 	BitrateKbps       int
 	PreservesSource   bool
 	RequiresTranscode bool
-	ExplicitRung bool
-	Reason       string
-	Warnings     []DegradationWarningV3
+	ExplicitRung      bool
+	Reason            string
+	Warnings          []DegradationWarningV3
 }
 
 func ResolveQualityPolicyV3(request StartRequestV3, source SourceDescriptorV3) QualityResultV3 {
@@ -688,7 +688,7 @@ func ResolveQualityPolicyV3(request StartRequestV3, source SourceDescriptorV3) Q
 	}
 	capKbps := optionalValueV3(request.BandwidthCapKbps)
 	capExceededBySource := capKbps > 0 && source.BitrateKbps > capKbps
-	if quality == QualityOriginalV3 && \!capExceededBySource {
+	if quality == QualityOriginalV3 && !capExceededBySource {
 		result := originalQualityResultV3(source)
 		result.Warnings = warnings
 		return result
@@ -701,7 +701,7 @@ func ResolveQualityPolicyV3(request StartRequestV3, source SourceDescriptorV3) Q
 	case quality == QualityOriginalV3:
 		targetHeight = ladderHeightForBandwidthV3(int(float64(capKbps) * 0.8))
 		capApplied = true
-	case quality \!= "auto":
+	case quality != "auto":
 		targetHeight, _ = strconv.Atoi(strings.TrimSuffix(quality, "p"))
 		reason = "quality_fixed_rung"
 		explicitRung = true
@@ -719,7 +719,7 @@ func ResolveQualityPolicyV3(request StartRequestV3, source SourceDescriptorV3) Q
 			targetHeight = minPositiveV3(targetHeight, ladderHeightForBandwidthV3(int(float64(bandwidth)*0.8)))
 			reason = "quality_bandwidth_limit"
 		} else if request.Metered {
-			if capped := minPositiveV3(targetHeight, 720); capped \!= targetHeight {
+			if capped := minPositiveV3(targetHeight, 720); capped != targetHeight {
 				targetHeight = capped
 				reason = "quality_metered_limit"
 			}
@@ -731,9 +731,9 @@ func ResolveQualityPolicyV3(request StartRequestV3, source SourceDescriptorV3) Q
 	if source.Height > 0 && targetHeight > source.Height {
 		targetHeight = source.Height
 	}
-	if capKbps > 0 && \!capApplied {
+	if capKbps > 0 && !capApplied {
 		wouldPreserve := source.Height > 0 && targetHeight >= source.Height
-		if (wouldPreserve && capExceededBySource) || (\!wouldPreserve && ladderBitrateKbpsV3(targetHeight) > capKbps) {
+		if (wouldPreserve && capExceededBySource) || (!wouldPreserve && ladderBitrateKbpsV3(targetHeight) > capKbps) {
 			capApplied = true
 			if capHeight := ladderHeightForBandwidthV3(int(float64(capKbps) * 0.8)); capHeight < targetHeight {
 				targetHeight = capHeight
@@ -744,7 +744,7 @@ func ResolveQualityPolicyV3(request StartRequestV3, source SourceDescriptorV3) Q
 		reason = decisionReasonBandwidthCapV3
 		warnings = append(warnings, DegradationWarningV3{Code: "bandwidth_cap_applied", Message: "Delivery quality is limited by the configured bandwidth cap."})
 	}
-	if source.Height > 0 && targetHeight >= source.Height && \!capApplied {
+	if source.Height > 0 && targetHeight >= source.Height && !capApplied {
 		return QualityResultV3{
 			Label:           strconv.Itoa(source.Height) + "p",
 			Width:           source.Width,
@@ -766,8 +766,8 @@ func ResolveQualityPolicyV3(request StartRequestV3, source SourceDescriptorV3) Q
 	if capKbps > 0 && bitrate > capKbps {
 		bitrate = capKbps
 	}
-	result := QualityResultV3{Label: label, Width: width, Height: effectiveHeight, BitrateKbps: bitrate, PreservesSource: \!capApplied && source.Height > 0 && effectiveHeight >= source.Height, ExplicitRung: explicitRung, Reason: reason, Warnings: warnings}
-	result.RequiresTranscode = \!result.PreservesSource
+	result := QualityResultV3{Label: label, Width: width, Height: effectiveHeight, BitrateKbps: bitrate, PreservesSource: !capApplied && source.Height > 0 && effectiveHeight >= source.Height, ExplicitRung: explicitRung, Reason: reason, Warnings: warnings}
+	result.RequiresTranscode = !result.PreservesSource
 	return result
 }
 
@@ -784,14 +784,14 @@ func hlsNativeAudioCodecV3(codec string) bool {
 }
 
 func hdrTranscodeUnavailableV3(source SourceDescriptorV3) bool {
-	return source.DynamicRange \!= "" && source.DynamicRange \!= DynamicRangeSDRV3
+	return source.DynamicRange != "" && source.DynamicRange != DynamicRangeSDRV3
 }
 
 func videoTranscodeExecutableV3(input PlannerInputV3, source SourceDescriptorV3) bool {
-	if \!deliveryAvailableV3(input.Request, DeliveryClassHLSV3) || \!input.Settings.TranscodeEnabled {
+	if !deliveryAvailableV3(input.Request, DeliveryClassHLSV3) || !input.Settings.TranscodeEnabled {
 		return false
 	}
-	if is4KSourceV3(input.EffectiveFile, source) && \!input.Settings.Allow4KTranscode {
+	if is4KSourceV3(input.EffectiveFile, source) && !input.Settings.Allow4KTranscode {
 		return false
 	}
 	if hdrTranscodeUnavailableV3(source) {
@@ -806,11 +806,11 @@ func recipeFromSourceV3(source SourceDescriptorV3) EffectiveRecipeV3 {
 
 func selectedTracksForPlanV3(file *models.MediaFile, audioIndex int, subtitle SubtitlePolicyResultV3) SelectedTracksV3 {
 	selected := SelectedTracksV3{}
-	if file \!= nil && audioIndex >= 0 && audioIndex < len(file.AudioTracks) {
+	if file != nil && audioIndex >= 0 && audioIndex < len(file.AudioTracks) {
 		index := audioIndex
 		selected.Audio = &TrackIdentityV3{ID: TrackIDV3(file.ID, "audio", audioIndex), Index: &index}
 	}
-	if file \!= nil && subtitle.SelectedIndex >= 0 {
+	if file != nil && subtitle.SelectedIndex >= 0 {
 		index := subtitle.SelectedIndex
 		selected.Subtitle = &TrackIdentityV3{ID: TrackIDV3(file.ID, "subtitle", index), Index: &index}
 	}
@@ -954,7 +954,7 @@ func SortedTransformationNamesV3(values []TransformationV3) []string {
 
 func deliveryAvailableV3(request StartRequestV3, deliveryClass string) bool {
 	capability, ok := request.ClientPlaybackContext.Deliveries[deliveryClass]
-	if \!ok {
+	if !ok {
 		return false
 	}
 	return capability.Enabled && capability.SupportedOnDevice
@@ -962,31 +962,31 @@ func deliveryAvailableV3(request StartRequestV3, deliveryClass string) bool {
 
 func deliverySupportsPlanV3(request StartRequestV3, deliveryClass string, plan PlanV3) bool {
 	capability, ok := request.ClientPlaybackContext.Deliveries[deliveryClass]
-	if \!ok || \!capability.Enabled || \!capability.SupportedOnDevice {
+	if !ok || !capability.Enabled || !capability.SupportedOnDevice {
 		return false
 	}
-	if len(capability.Containers) > 0 && \!containsFoldV3(capability.Containers, plan.Stream.Container) {
+	if len(capability.Containers) > 0 && !containsFoldV3(capability.Containers, plan.Stream.Container) {
 		return false
 	}
-	if codec := strings.TrimSpace(plan.EffectiveRecipe.VideoCodec); codec \!= "" && len(capability.VideoCodecs) > 0 && \!containsFoldV3(capability.VideoCodecs, codec) {
+	if codec := strings.TrimSpace(plan.EffectiveRecipe.VideoCodec); codec != "" && len(capability.VideoCodecs) > 0 && !containsFoldV3(capability.VideoCodecs, codec) {
 		return false
 	}
-	if codec := strings.TrimSpace(plan.EffectiveRecipe.AudioCodec); codec \!= "" {
+	if codec := strings.TrimSpace(plan.EffectiveRecipe.AudioCodec); codec != "" {
 		hasAudioConstraints := len(capability.AudioDecodeCodecs) > 0 || len(capability.AudioPassthroughCodecs) > 0
 		if hasAudioConstraints {
 			supportedCodecs := capability.AudioDecodeCodecs
 			if plan.Claims.Audio.Passthrough {
 				supportedCodecs = capability.AudioPassthroughCodecs
 			}
-			if \!containsFoldV3(supportedCodecs, codec) {
+			if !containsFoldV3(supportedCodecs, codec) {
 				return false
 			}
 		}
 	}
-	if capability.MaxChannels \!= nil && plan.EffectiveRecipe.AudioChannels \!= nil && *plan.EffectiveRecipe.AudioChannels > *capability.MaxChannels {
+	if capability.MaxChannels != nil && plan.EffectiveRecipe.AudioChannels != nil && *plan.EffectiveRecipe.AudioChannels > *capability.MaxChannels {
 		return false
 	}
-	if capability.HDRDetails \!= nil && \!hdrDetailsSupportPlanV3(*capability.HDRDetails, plan) {
+	if capability.HDRDetails != nil && !hdrDetailsSupportPlanV3(*capability.HDRDetails, plan) {
 		return false
 	}
 	return true
@@ -1016,10 +1016,10 @@ func hdrDetailsSupportPlanV3(hdr HDRCapabilitiesV3, plan PlanV3) bool {
 	}
 }
 func ExplainPlannerResultV3(result PlannerResultV3) string {
-	if result.Plan \!= nil {
+	if result.Plan != nil {
 		return fmt.Sprintf("%s:%s", result.Plan.Delivery, result.Plan.DecisionReason)
 	}
-	if result.Terminal \!= nil {
+	if result.Terminal != nil {
 		return "terminal:" + result.Terminal.Reason
 	}
 	return "invalid"
