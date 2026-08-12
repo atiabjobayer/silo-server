@@ -1,0 +1,5 @@
+FROM silo-api:latest
+RUN echo "deb http://deb.debian.org/debian trixie non-free non-free-firmware" >> /etc/apt/sources.list \
+    && apt-get update \
+    && apt-get install -y intel-media-va-driver-non-free vainfo\
+    && rm -rf /var/lib/apt/lists/*
