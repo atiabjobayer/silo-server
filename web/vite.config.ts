@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => {
   const allowedHosts = [
     "silo.local",
     ".ts.net",
-    "media.atiabjobayer.com",
+    "penguin.atiab.bd",
     os.hostname(),
     ...(env.VITE_ALLOWED_HOSTS || "")
       .split(",")
