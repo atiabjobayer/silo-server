@@ -32,7 +32,9 @@ COPY go.mod go.sum ./
 COPY internal/compat/zishang520-webtransport-go/ internal/compat/zishang520-webtransport-go/
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    go mod download
+    bash -c 'echo "==> go mod download: $(wc -l < go.sum | tr -d " ") module checksum entries" && \
+    go mod download -x && \
+    echo "==> go mod download complete"'
 COPY web/embed.go web/embed.go
 COPY --from=frontend_dist / web/dist
 COPY cmd/ cmd/
