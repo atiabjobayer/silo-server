@@ -33,8 +33,10 @@ COPY internal/compat/zishang520-webtransport-go/ internal/compat/zishang520-webt
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     bash -c 'echo "==> go mod download: $(wc -l < go.sum | tr -d " ") module checksum entries" && \
-    go mod download -x && \
-    echo "==> go mod download complete"'
+    if getent hosts proxy.golang.org >/dev/null 2>&1; then echo "==> proxy.golang.org resolves"; else echo "==> WARNING: proxy.golang.org does not resolve; direct VCS fallback will be very slow"; fi && \
+    timeout 1200 go mod download -x; rc=$?; \
+    if [ "$rc" -eq 124 ]; then echo "==> go mod download TIMED OUT after 20 minutes; partial progress is kept in the cache mount, re-run the build to resume"; else echo "==> go mod download complete (exit $rc)"; fi; \
+    exit $rc'
 COPY web/embed.go web/embed.go
 COPY --from=frontend_dist / web/dist
 COPY cmd/ cmd/
