@@ -86,7 +86,9 @@ services:
         COPY contracts/ contracts/
         RUN --mount=type=cache,target=/root/.cache/go-build \
             --mount=type=cache,target=/go/pkg/mod \
-            go build -o /silo ./cmd/silo/
+            bash -c 'echo "==> go build: compiling $(go list ./... | wc -l | tr -d " ") repo packages" && \
+            go build -v -o /silo ./cmd/silo/ && \
+            echo "==> go build complete"'
         ENTRYPOINT ["/silo"]
     image: silo-dev-silo
     restart: unless-stopped

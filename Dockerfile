@@ -50,9 +50,11 @@ ARG BUILD_REVISION
 ARG BUILD_DIRTY=false
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    go build \
+    bash -c 'echo "==> go build: compiling $(go list ./... | wc -l | tr -d " ") repo packages" && \
+    go build -v \
     -ldflags "-X github.com/Silo-Server/silo-server/internal/buildinfo.revisionOverride=${BUILD_REVISION} -X github.com/Silo-Server/silo-server/internal/buildinfo.dirtyOverride=${BUILD_DIRTY}" \
-    -o /silo ./cmd/silo/
+    -o /silo ./cmd/silo/ && \
+    echo "==> go build complete"'
 
 # Stage 3: Runtime
 FROM debian:bookworm-slim
