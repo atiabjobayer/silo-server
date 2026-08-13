@@ -85,10 +85,14 @@ interface VideoPlayerProps {
   plan: PlanV3;
   /** Bumped on every adopted plan; stream-reload effects key on it. */
   planRevision: number;
+  /** Whether a newly adopted transport should begin playing immediately. */
+  shouldAutoPlay?: boolean;
   /** True while a replan is in flight, so the quality menu can show progress. */
   replanning?: boolean;
   /** Server-described replan error, if the last replan was refused. */
   replanError?: string | null;
+  /** Title for the replan error, used when surfacing the refusal as a toast. */
+  replanErrorTitle?: string | null;
   sessionId: string;
   selectedVersion?: PlayerFileVersion;
   versions?: PlayerFileVersion[];
@@ -190,8 +194,10 @@ export function VideoPlayer({
   streamUrl,
   plan,
   planRevision,
+  shouldAutoPlay = true,
   replanning = false,
   replanError = null,
+  replanErrorTitle = null,
   sessionId,
   selectedVersion,
   versions = [],
@@ -1394,6 +1400,12 @@ export function VideoPlayer({
       if (video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) return;
       autoplayStarted = true;
       cleanupStartupListeners();
+      if (!shouldAutoPlay) {
+        hlsStartupGuardRef.current?.markPlaybackStarted();
+        setAwaitingFirstFrame(false);
+        setPlaying(false);
+        return;
+      }
       video.play().catch(() => setPlaying(false));
     };
 
@@ -1539,7 +1551,7 @@ export function VideoPlayer({
         // Direct play — set video src directly.
         video.src = effectiveStreamUrl;
         video.currentTime = effectiveInitialPosition;
-        video.play().catch(() => setPlaying(false));
+        if (shouldAutoPlay) video.play().catch(() => setPlaying(false));
       }
     }
 
@@ -1570,6 +1582,7 @@ export function VideoPlayer({
     planRevision,
     plannedBitrateKbps,
     reportCurrentPlanFailure,
+    shouldAutoPlay,
   ]);
 
   // -- Video event listeners --
@@ -1938,13 +1951,19 @@ export function VideoPlayer({
   // unchanged selection instead of retrying. Pin the accepted selection just
   // like a manual choice so auto-selection does not immediately request the
   // rejected track again; a later user choice can still retry it explicitly.
+  // The rollback is silent otherwise: the refusal is only rendered inside the
+  // quality menu, which the user has no reason to open after picking a
+  // subtitle. Clearing the request ref keeps this to one toast per refusal.
   useEffect(() => {
     if (requestedSubtitleTrackChangeRef.current && replanError && !replanning) {
       subtitleSelectionWasManualRef.current = true;
       setActiveSubtitleIndex(plan.selected_tracks.subtitle?.index ?? null);
       requestedSubtitleTrackChangeRef.current = null;
+      toast.error(replanErrorTitle ?? "That subtitle track can't be used", {
+        description: replanError,
+      });
     }
-  }, [plan.selected_tracks.subtitle?.index, replanError, replanning]);
+  }, [plan.selected_tracks.subtitle?.index, replanError, replanErrorTitle, replanning]);
 
   // A refusal pin belongs only to the session that rejected the automatic
   // selection. Clear it before the auto-selection effect evaluates a new

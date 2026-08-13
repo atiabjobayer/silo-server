@@ -6,6 +6,7 @@ import { PlayerConfigProvider, type PlayerConfig } from "../context/PlayerConfig
 import { fixturePlanV3 } from "../protocol-v3.fixtures";
 import type { PlaybackRealtimeEventEnvelope } from "../realtime-protocol";
 import type { PlayerSubtitleInfo } from "../types";
+import { HLS_STARTUP_TIMEOUT_MS } from "../utils/hlsStartupGuard";
 import { VideoPlayer } from "./VideoPlayer";
 
 const realtimeOptions = vi.hoisted(() => ({
@@ -21,6 +22,9 @@ const subtitleTimeline = vi.hoisted(() => ({
   textOffsetSeconds: null as number | null,
   assOffsetSeconds: null as number | null,
 }));
+const toastError = vi.hoisted(() => vi.fn());
+
+vi.mock("sonner", () => ({ toast: { error: toastError, success: vi.fn(), message: vi.fn() } }));
 
 vi.mock("../hooks/usePlaybackRealtime", () => ({
   usePlaybackRealtime: vi.fn((options) => {
@@ -130,6 +134,7 @@ describe("VideoPlayer plan failure recovery", () => {
     controls.current = null;
     subtitleTimeline.textOffsetSeconds = null;
     subtitleTimeline.assOffsetSeconds = null;
+    toastError.mockClear();
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
@@ -138,6 +143,50 @@ describe("VideoPlayer plan failure recovery", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+  });
+
+  it("loads a replacement transport without resuming paused playback", async () => {
+    const play = vi.mocked(HTMLMediaElement.prototype.play);
+    const { container } = renderPlayer({ shouldAutoPlay: false });
+    const video = container.querySelector("video");
+    if (!video) throw new Error("expected video element");
+
+    await waitFor(() => expect(video.src).toContain("/api/v1/stream/session-1"));
+    Object.defineProperty(video, "readyState", { configurable: true, value: 3 });
+    fireEvent.canPlay(video);
+    expect(play).not.toHaveBeenCalled();
+  });
+
+  it("does not report a startup timeout while HLS is intentionally paused", () => {
+    vi.useFakeTimers();
+    try {
+      const onPlanFailure = vi.fn();
+      const hlsPlan = fixturePlanV3({
+        delivery: "server_remux_hls",
+        stream: {
+          url: "/stream/session-1/master.m3u8",
+          protocol: "hls",
+          headers: {},
+          header_refresh: "none",
+        },
+      });
+      const { container } = renderPlayer({
+        plan: hlsPlan,
+        shouldAutoPlay: false,
+        onPlanFailure,
+      });
+      const video = container.querySelector("video");
+      if (!video) throw new Error("expected video element");
+
+      Object.defineProperty(video, "readyState", { configurable: true, value: 3 });
+      fireEvent.canPlay(video);
+      act(() => vi.advanceTimersByTime(HLS_STARTUP_TIMEOUT_MS));
+
+      expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+      expect(onPlanFailure).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("surfaces a refused replan only for the transport-dead plan revision", async () => {
@@ -223,6 +272,74 @@ describe("VideoPlayer plan failure recovery", () => {
     await waitFor(() => expect(controls.current?.activeSubtitleIndex).toBe(2));
     expect(onSubtitleTrackChange).toHaveBeenCalledTimes(2);
     expect(onSubtitleTrackChange).toHaveBeenLastCalledWith(2, 0);
+  });
+
+  // The rollback is otherwise silent: the refusal only renders inside the
+  // quality menu, which a user who just picked a subtitle never opens.
+  it("toasts the server's refusal when a subtitle change is rolled back", async () => {
+    const onSubtitleTrackChange = vi.fn();
+    const sidecarTrack: PlayerSubtitleInfo = {
+      index: 2,
+      media_file_id: 7,
+      track_id: "file:7:subtitle:2",
+      language: "en",
+      codec: "srt",
+      label: "English",
+      source: "external",
+      url: "/stream/session-1/subtitles/2.vtt",
+    };
+    const { rerenderPlayer } = renderPlayer({
+      subtitleUrls: [sidecarTrack],
+      subtitleMode: "always",
+      preferredSubtitleLanguage: "en",
+      onSubtitleTrackChange,
+    });
+
+    await waitFor(() => expect(onSubtitleTrackChange).toHaveBeenCalledOnce());
+    expect(toastError).not.toHaveBeenCalled();
+
+    rerenderPlayer({
+      replanError: "The selected subtitle must be burned into the video, but 4K is disabled.",
+      replanErrorTitle: "That subtitle track can't be used",
+    });
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledOnce());
+    expect(toastError).toHaveBeenCalledWith("That subtitle track can't be used", {
+      description: "The selected subtitle must be burned into the video, but 4K is disabled.",
+    });
+  });
+
+  it("falls back to a generic subtitle refusal title and toasts once", async () => {
+    const onSubtitleTrackChange = vi.fn();
+    const sidecarTrack: PlayerSubtitleInfo = {
+      index: 2,
+      media_file_id: 7,
+      track_id: "file:7:subtitle:2",
+      language: "en",
+      codec: "srt",
+      label: "English",
+      source: "external",
+      url: "/stream/session-1/subtitles/2.vtt",
+    };
+    const { rerenderPlayer } = renderPlayer({
+      subtitleUrls: [sidecarTrack],
+      subtitleMode: "always",
+      preferredSubtitleLanguage: "en",
+      onSubtitleTrackChange,
+    });
+
+    await waitFor(() => expect(onSubtitleTrackChange).toHaveBeenCalledOnce());
+    rerenderPlayer({ replanError: "Silo could not apply the subtitle selection." });
+    await waitFor(() => expect(toastError).toHaveBeenCalledOnce());
+    expect(toastError).toHaveBeenCalledWith("That subtitle track can't be used", {
+      description: "Silo could not apply the subtitle selection.",
+    });
+
+    // The ref cleared on rollback, so a re-render with the same refusal must
+    // not stack a second toast.
+    rerenderPlayer({ replanError: "Silo could not apply the subtitle selection." });
+    await waitFor(() => expect(controls.current?.activeSubtitleIndex).toBeNull());
+    expect(toastError).toHaveBeenCalledOnce();
   });
 });
 

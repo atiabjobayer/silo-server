@@ -1671,6 +1671,15 @@ func NewRouter(deps Dependencies) chi.Router {
 		// background worker.
 		downloadSvc.SetSubscriptions(downloads.NewSubscriptionRepository(deps.DB))
 		downloadHandler = handlers.NewDownloadHandler(downloadSvc)
+		if deps.NodePlanner != nil {
+			downloadHandler.SetProxyDelivery(deps.NodePlanner, func() string {
+				cfg := deps.CurrentConfig()
+				if cfg == nil {
+					return ""
+				}
+				return cfg.Auth.JWTSecret
+			})
+		}
 		if profileHandler != nil {
 			// Profiles may live outside Postgres (sqlite userdb backend), so
 			// deleting one cannot FK-cascade the shared user_devices table;
@@ -2566,6 +2575,11 @@ func NewRouter(deps Dependencies) chi.Router {
 						}
 					}
 					r.Route("/subtitles", func(r chi.Router) {
+						// Capability probe for external subtitle search. Two
+						// segments on purpose: a bare /providers would shadow
+						// the /{media_file_id} route below, while
+						// /providers/status never competes with it in chi.
+						r.Get("/providers/status", subtitleSearchHandler.HandleProviderStatus)
 						r.Post("/search", subtitleSearchHandler.HandleSearch)
 						r.Post("/download", subtitleSearchHandler.HandleDownload)
 						r.Post("/upload", subtitleSearchHandler.HandleUpload)
@@ -2585,6 +2599,17 @@ func NewRouter(deps Dependencies) chi.Router {
 						}
 						r.Get("/{media_file_id}", subtitleSearchHandler.HandleList)
 						r.Delete("/{id}", subtitleSearchHandler.HandleDelete)
+					})
+				} else {
+					// The whole group above is conditional (it needs the DB,
+					// S3 and the subtitle repo), so on a storage-less
+					// deployment the capability probe would 404 — leaving a
+					// client to interpret the same ambiguous status the probe
+					// exists to replace. Mount the probe alone, answering
+					// enabled:false, so feature detection always gets a real
+					// answer.
+					r.Route("/subtitles", func(r chi.Router) {
+						r.Get("/providers/status", handlers.WriteSubtitleProvidersDisabledStatus)
 					})
 				}
 
@@ -2672,12 +2697,16 @@ func NewRouter(deps Dependencies) chi.Router {
 					// HEAD natively.
 					r.Get("/{id}/file", downloadHandler.HandleDownloadFile)
 					r.Head("/{id}/file", downloadHandler.HandleDownloadFile)
+					r.Get("/{id}/file-proxy", downloadHandler.HandleDownloadFileViaProxy)
+					r.Head("/{id}/file-proxy", downloadHandler.HandleDownloadFileViaProxy)
 					r.Get("/{id}/manifest", downloadHandler.HandleManifest)
 					r.Get("/{id}/artwork/{kind}", downloadHandler.HandleArtwork)
 					r.Get("/{id}/subtitles/{ref}", downloadHandler.HandleSubtitle)
 				})
 				r.Get("/direct-download", downloadHandler.HandleDirectDownload)
 				r.Head("/direct-download", downloadHandler.HandleDirectDownload)
+				r.Get("/direct-download-proxy", downloadHandler.HandleDirectDownloadViaProxy)
+				r.Head("/direct-download-proxy", downloadHandler.HandleDirectDownloadViaProxy)
 
 				// Recipe gallery catalog (no profile required — purely static metadata).
 				recipeHandler := &handlers.RecipeHandler{}

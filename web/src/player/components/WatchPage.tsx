@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { PlayerFileVersion, WatchPageProps } from "../types";
+import type { PlayerFileVersion, PlayerPlaybackStateChange, WatchPageProps } from "../types";
 import type { PlaybackRealtimeEventEnvelope } from "../realtime-protocol";
 import type { SubtitleInventoryItemV3 } from "../protocol-v3";
 import { usePlaybackSession } from "../hooks/usePlaybackSession";
@@ -168,6 +168,15 @@ export function WatchPage({
       session.switchAudioTrack(index, currentPosition);
     },
     [session],
+  );
+
+  const updatePlaybackState = session.updatePlaybackState;
+  const handlePlaybackStateChange = useCallback(
+    (state: PlayerPlaybackStateChange) => {
+      updatePlaybackState(state.currentTime, state.playing);
+      onPlaybackStateChange?.(state);
+    },
+    [onPlaybackStateChange, updatePlaybackState],
   );
 
   /**
@@ -426,8 +435,10 @@ export function WatchPage({
       streamUrl={session.streamUrl}
       plan={session.plan}
       planRevision={session.planRevision}
+      shouldAutoPlay={session.shouldAutoPlay}
       replanning={session.replanning}
       replanError={session.error}
+      replanErrorTitle={session.errorTitle}
       sessionId={session.sessionId}
       selectedVersion={selectedVersion}
       versions={playbackVersions}
@@ -475,7 +486,7 @@ export function WatchPage({
       displayMode={displayMode}
       onPictureInPictureChange={onPictureInPictureChange}
       autoEnterPictureInPicture={autoEnterPictureInPicture}
-      onPlaybackStateChange={onPlaybackStateChange}
+      onPlaybackStateChange={handlePlaybackStateChange}
       onPlaybackTransportReady={onPlaybackTransportReady}
       onRealtimeEvent={handleRealtimeEvent}
       onRealtimeConnectionStateChange={setRealtimeConnectionState}

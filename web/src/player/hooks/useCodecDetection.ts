@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useState } from "react";
 import { detectHLSSupport, type WebCapabilityProbe } from "../client-context-v3";
 
 /** Maps our codec names to the MIME declarations browsers expose for them. */
@@ -8,6 +8,46 @@ const VIDEO_CODEC_MAP: Record<string, string> = {
   av1: "av01.0.08M.08",
   vp9: "vp09.00.10.08",
 };
+
+// Silo's native Dolby Vision remux recipe preserves the DOVI configuration
+// record under a dvh1 sample entry — the one Apple's HLS authoring spec calls
+// for, and the only one Safari answers "probably" for. Probe exactly that
+// shape: a browser that recognizes only dvhe could accept a claim here and
+// then reject the dvh1 file the remux delivers, so a dvhe-only answer earns no
+// claim and that browser keeps the validated HDR10 fallback instead.
+// Level 6 covers the 2160p24 source class involved in the web regression.
+const DOLBY_VISION_PROFILE_PROBES: Record<
+  number,
+  { mime: string; maxLevel: number; blCompatibilityIds?: number[] }
+> = {
+  5: { mime: 'video/mp4; codecs="dvh1.05.06"', maxLevel: 6 },
+  // The MIME codec string identifies Profile 8 but not its base-layer
+  // compatibility ID. Conservatively claim only the Profile 8.1 shape that
+  // this regression and Safari's progressive remux path exercise.
+  8: { mime: 'video/mp4; codecs="dvh1.08.06"', maxLevel: 6, blCompatibilityIds: [1] },
+};
+
+// Silo's Profile 7 fallback strips Dolby Vision metadata into a progressive
+// MP4 whose video is a 2160p HEVC Main10 HDR10 base layer. Media Capabilities
+// can query the codec, transfer function, gamut, and static metadata together,
+// avoiding the old mistake of treating a generic HDR output query as proof of
+// every HDR format.
+// The strip remux labels its output hvc1 — the sample entry Apple requires and
+// the one Safari answers for — so that is the only entry probed: an hev1-only
+// answer is evidence for a file Silo never sends and earns no claim.
+const HDR10_PROGRESSIVE_CONFIGURATION = {
+  type: "file",
+  video: {
+    contentType: 'video/mp4; codecs="hvc1.2.4.L153.B0"',
+    width: 3840,
+    height: 2160,
+    bitrate: 80_000_000,
+    framerate: 24,
+    colorGamut: "rec2020",
+    transferFunction: "pq",
+    hdrMetadataType: "smpteSt2086",
+  },
+} satisfies MediaDecodingConfiguration;
 
 const AUDIO_CODEC_MAP: Record<string, string[]> = {
   aac: ['audio/mp4; codecs="mp4a.40.2"', 'video/mp4; codecs="mp4a.40.2"'],
@@ -59,6 +99,23 @@ export function detectHDRFromMatchMedia(matchMediaFn: typeof matchMedia | undefi
   );
 }
 
+/**
+ * Probes the exact HDR10 progressive shape produced by Silo's remux path.
+ * Deliberately independent of the `dynamic-range` media query: that query
+ * describes the active output, not the decoder, and browsers tone-map HDR
+ * content onto SDR outputs.
+ */
+export async function probeHDR10PlaybackSupport(): Promise<boolean> {
+  if (typeof navigator === "undefined" || !navigator.mediaCapabilities) return false;
+
+  try {
+    const result = await navigator.mediaCapabilities.decodingInfo(HDR10_PROGRESSIVE_CONFIGURATION);
+    return result.supported && result.smooth;
+  } catch {
+    return false;
+  }
+}
+
 function testMediaType(mime: string): boolean {
   if (typeof MediaSource !== "undefined") {
     try {
@@ -73,6 +130,18 @@ function testMediaType(mime: string): boolean {
     return (
       document.createElement(mime.startsWith("audio/") ? "audio" : "video").canPlayType(mime) !== ""
     );
+  } catch {
+    return false;
+  }
+}
+
+function testMediaElementType(mime: string): boolean {
+  if (typeof document === "undefined") return false;
+  try {
+    // `maybe` only recognizes the container/type. Structured Dolby Vision
+    // claims require the media element's definitive answer for the exact
+    // sample entry.
+    return document.createElement("video").canPlayType(mime) === "probably";
   } catch {
     return false;
   }
@@ -114,9 +183,18 @@ export function probeWebCapabilities(): WebCapabilityProbe {
     }
   }
 
+  // `screen` reports logical CSS pixels; a 2160p-class panel on a 2x display
+  // measures 1080p without the device pixel ratio applied.
+  const pixelRatio =
+    typeof window !== "undefined" &&
+    typeof window.devicePixelRatio === "number" &&
+    Number.isFinite(window.devicePixelRatio) &&
+    window.devicePixelRatio > 0
+      ? window.devicePixelRatio
+      : 1;
   const maxResolution =
     typeof screen !== "undefined"
-      ? detectMaxResolutionFromScreen(screen.width, screen.height)
+      ? detectMaxResolutionFromScreen(screen.width * pixelRatio, screen.height * pixelRatio)
       : "1080p";
 
   // HDR detection (best effort). Wrap matchMedia so it keeps its Window
@@ -124,21 +202,109 @@ export function probeWebCapabilities(): WebCapabilityProbe {
   const hdr = detectHDRFromMatchMedia(
     typeof matchMedia !== "undefined" ? (query) => matchMedia(query) : undefined,
   );
+  // Decoder capability and active-output HDR are separate facts: browsers
+  // tone-map HDR content onto SDR outputs, and Safari 26 reports
+  // `dynamic-range: standard` even on an XDR panel. Exact positive decode
+  // evidence must not be discarded because the coarse output query says no, so
+  // the sample-entry probes run unconditionally and `hdr` stays a best-effort
+  // output signal only.
+  const dolbyVisionProfiles = Object.entries(DOLBY_VISION_PROFILE_PROBES)
+    .filter(([, probe]) => testMediaElementType(probe.mime))
+    .map(([profile]) => Number(profile));
+  const progressiveCodecsVideo = [...codecsVideo];
+  if (dolbyVisionProfiles.length > 0 && !progressiveCodecsVideo.includes("hevc")) {
+    // Every Dolby Vision profile probed above uses an HEVC base layer. The
+    // planner requires the flat base-codec claim as well as the HDR profile,
+    // but this media-element evidence must not leak into hls.js' MSE path.
+    progressiveCodecsVideo.push("hevc");
+  }
+  const hdrDetails = {
+    // Generic HDR output eligibility does not prove either static HDR format.
+    // Only publish the exact Dolby Vision formats tested above.
+    hdr10: false,
+    hdr10_plus: false,
+    hlg: false,
+    dolby_vision_profiles: dolbyVisionProfiles,
+    dolby_vision_profile_levels: dolbyVisionProfiles.map((profile) => {
+      const profileProbe = DOLBY_VISION_PROFILE_PROBES[profile]!;
+      return {
+        profile,
+        max_level: profileProbe.maxLevel,
+        ...(profileProbe.blCompatibilityIds
+          ? { bl_compatibility_ids: profileProbe.blCompatibilityIds }
+          : {}),
+      };
+    }),
+  };
 
   return {
     containers,
     codecsVideo,
+    progressiveCodecsVideo,
     codecsAudio,
     maxResolution,
     hdr,
+    hdrDetails,
     hls: detectHLSSupport(),
   };
 }
 
 /**
- * Memoizes the browser capability probe for the lifetime of the component.
- * Nothing it measures changes while the page is open.
+ * Keeps the browser capability probe current with the active output route.
+ * Moving a window between SDR and HDR displays can change the media-query
+ * result without remounting the player, so refresh when either query changes.
  */
 export function useCodecDetection(): WebCapabilityProbe {
-  return useMemo(() => probeWebCapabilities(), []);
+  const [capabilities, setCapabilities] = useState(probeWebCapabilities);
+
+  useEffect(() => {
+    if (typeof matchMedia === "undefined") return;
+    let disposed = false;
+    let probeGeneration = 0;
+    const queries = [
+      matchMedia("(dynamic-range: high)"),
+      matchMedia("(video-dynamic-range: high)"),
+    ];
+    const refresh = () => {
+      const generation = ++probeGeneration;
+      const next = probeWebCapabilities();
+      setCapabilities(next);
+
+      void probeHDR10PlaybackSupport().then((hdr10) => {
+        if (disposed || generation !== probeGeneration || !hdr10) return;
+        setCapabilities((current) => ({
+          ...current,
+          // The exact HDR10 query proves the HEVC Main10 base codec for the
+          // progressive MP4 route even when the separate generic HEVC probe was
+          // rejected. Keep that evidence scoped away from original and HLS.
+          progressiveCodecsVideo: current.progressiveCodecsVideo.includes("hevc")
+            ? current.progressiveCodecsVideo
+            : [...current.progressiveCodecsVideo, "hevc"],
+          hdrDetails: {
+            ...current.hdrDetails,
+            hdr10: true,
+            hdr10_max_width: 3840,
+            hdr10_max_height: 2160,
+            hdr10_max_frame_rate: 24,
+            hdr10_max_bitrate_kbps: 80_000,
+          },
+        }));
+      });
+    };
+    refresh();
+    for (const query of queries) {
+      if (typeof query.addEventListener === "function") query.addEventListener("change", refresh);
+      else query.addListener?.(refresh);
+    }
+    return () => {
+      disposed = true;
+      for (const query of queries) {
+        if (typeof query.removeEventListener === "function")
+          query.removeEventListener("change", refresh);
+        else query.removeListener?.(refresh);
+      }
+    };
+  }, []);
+
+  return capabilities;
 }

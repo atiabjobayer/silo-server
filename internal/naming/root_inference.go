@@ -40,17 +40,29 @@ var (
 	// Trailing release group and scene suffixes. Anchored to end of string.
 	// Examples: -HDHub, -MsMod, -mkvC, -RARBG, -ION10, -DDR, -Telly,
 	//           -WARRNING (sic), -EZTV, -mSD, -minx, -ETHEL.
-	// Also catches -[scene] and .[scene] variants (case-insensitive).
-	inferReleaseSuffixRe = regexp.MustCompile(`(?i)[ .\-–](?:hdhub|msmod|mkvc|rarbg|ion\d*|ddr|telly|war?r?ning|eztv|msd|minx|ethel|megusta|galaxyrg|psa|yify|yts|cmrg|crazy|sadece|avi|evo|hive|mzabi|vyndros|flux|fgt|saint|samppa|mundane|tigole|prof|mteam|ntb|ntg|tps|ebp|playnow|fleet|phoenix|mzabi|smurf|emx|tigole)\b[ .\-–]*$`)
+	// Also catches -[scene] and .[scene] variants (case-insensitive), with
+	// or without a space before the dash (" -MsMod").
+	inferReleaseSuffixRe = regexp.MustCompile(`(?i)[ .\-–]+(?:hdhub|msmod|mkvc|rarbg|ion\d*|ddr|telly|war?r?ning|eztv|msd|minx|ethel|megusta|galaxyrg|psa|yify|yts|cmrg|crazy|sadece|avi|evo|hive|mzabi|vyndros|flux|fgt|saint|samppa|mundane|tigole|prof|mteam|ntb|ntg|tps|ebp|playnow|fleet|phoenix|mzabi|smurf|emx|tigole)\b[ .\-–]*$`)
 
 	// Source/quality/edition tokens that are NOT covered by
 	// inferReleaseTokenRe (that regex requires word-boundary isolation).
-	// Covers compound tokens like "HDTC", "AMZN", "WEBRip", "HC-HDRip",
-	// and edition markers like "Unrated", "Extended", "Director's Cut".
-	inferSourceQualityRe = regexp.MustCompile(`(?i)\b(?:hdtc|hdcam|amzn|web[ ._-]?rip|hmax|dsnp|nf|atvp|hulu|peacock|hc[ ._-]?hdrip|unrated|extended|directors?[ ._-]?cut|theatrical|special[ ._-]?edition|remastered|imax|open[ ._-]?matte)\b`)
+	// Covers compound tokens like "HDTC", "AMZN", "AMZN-WEB", "WEBRip",
+	// "HC-HDRip", and edition markers like "Unrated", "Extended",
+	// "Director's Cut".
+	inferSourceQualityRe = regexp.MustCompile(`(?i)\b(?:hdtc|hdcam|amzn[ ._-]?web[ ._-]?(?:dl|rip)?|amzn|web[ ._-]?rip|hmax|dsnp|nf|atvp|hulu|peacock|hc[ ._-]?hdrip|unrated|extended|directors?[ ._'’-]?(?:s[ ._-]?)?cut|theatrical|special[ ._-]?edition|remastered|imax|open[ ._-]?matte)\b`)
 
 	// Version/part markers: V2, V3, PART 1, CD1, etc.
 	inferVersionPartRe = regexp.MustCompile(`(?i)\b(?:v\d+|part[ ._-]?\d+|cd\d+|disc[ ._-]?\d+|proper|repack|rerip|internal|limited|readnfo)\b`)
+
+	// Un-bracketed audio/subtitle tags: "Dual Audio", "Multi-Audio",
+	// "ESub", "ESubs", etc. The bracketed variants are handled by
+	// inferBracketedTagRe.
+	inferAudioSubTagRe = regexp.MustCompile(`(?i)\b(?:dual[ ._-]?audio|multi[ ._-]?audio|esubs?)\b`)
+
+	// Runs of dot/space separators left behind after token stripping
+	// ("Title. . .", ". .Title"). Single dots between word characters
+	// ("The.Shield.S06E02") are preserved.
+	inferDotRunRe = regexp.MustCompile(`[. ](?:[. ])+`)
 )
 
 type RootAssignment struct {
@@ -608,8 +620,12 @@ func stripInferReleaseTokens(name string) string {
 	// 6. Strip standalone technical tokens (codecs, resolutions, etc.)
 	s = inferReleaseTokenRe.ReplaceAllString(s, " ")
 
-	// Collapse resulting whitespace.
+	// 7. Strip un-bracketed audio/subtitle tags: Dual Audio, ESub, etc.
+	s = inferAudioSubTagRe.ReplaceAllString(s, " ")
+
+	// Collapse resulting whitespace and stray dot separators.
 	s = collapseWhitespace(strings.TrimSpace(s))
+	s = strings.TrimSpace(inferDotRunRe.ReplaceAllString(s, " "))
 
 	if s == "" || s == name {
 		return ""
