@@ -2360,15 +2360,23 @@ func shouldTryAlternateFileV3(qualityPreference string) bool {
 }
 
 const (
-	terminalNoAlternateVersionV3      = "no_alternate_version"
-	terminalHDRTranscodeUnsupportedV3 = "hdr_transcode_unsupported"
+	terminalNoAlternateVersionV3            = "no_alternate_version"
+	terminalHDRTranscodeUnsupportedV3       = "hdr_transcode_unsupported"
+	terminalSubtitleConversionUnsupportedV3 = "subtitle_conversion_unsupported"
 )
 
 func terminalAllowsAlternateFileV3(terminal *playback.TerminalV3) bool {
 	if terminal == nil {
 		return false
 	}
-	return terminal.Reason == terminalNoAlternateVersionV3 || terminal.Reason == terminalHDRTranscodeUnsupportedV3
+	// A bitmap subtitle can require video burn-in that the mounted source
+	// cannot provide (HDR has no tone-map recipe, 4K transcode disabled,
+	// transcoding turned off). An alternate version can still be viable, so
+	// these refusals participate in the fallback like the HDR and 4K
+	// terminals they replaced.
+	return terminal.Reason == terminalNoAlternateVersionV3 ||
+		terminal.Reason == terminalHDRTranscodeUnsupportedV3 ||
+		terminal.Reason == terminalSubtitleConversionUnsupportedV3
 }
 
 func replanAllowsAlternateFileV3(operation playback.ReplanOperationV3, qualityPreference string) bool {
@@ -2498,8 +2506,15 @@ func (h *PlaybackHandler) HandlePlaybackRouteEventV3(w http.ResponseWriter, r *h
 			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to authorize the route event")
 			return
 		}
-		// Stale client events are telemetry-only; accepting as a no-op avoids
-		// interrupting active playback when the app races an old session/attempt.
+		// A terminal-start claim for an attempt the server never saw cannot be
+		// attributed and may describe another profile's attempt; refuse it.
+		// Other stale events are telemetry-only, so accepting them as no-ops
+		// avoids interrupting active playback when a client races an old
+		// session/attempt.
+		if terminalStartRouteEventV3(event) {
+			writeError(w, http.StatusForbidden, "forbidden", "Route event does not belong to this profile")
+			return
+		}
 		slog.InfoContext(r.Context(), "protocol v3 route event ignored for missing attempt", "component", "api",
 			"playback_attempt_id", event.PlaybackAttemptID,
 			"session_id", event.SessionID,

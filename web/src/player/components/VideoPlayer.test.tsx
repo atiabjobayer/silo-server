@@ -16,6 +16,7 @@ const controls = vi.hoisted(() => ({
   current: null as null | {
     activeSubtitleIndex: number | null;
     subtitleTracks: PlayerSubtitleInfo[];
+    onSubtitleSelect?: (index: number | null, inventoryTrack?: unknown) => void;
   },
 }));
 const subtitleTimeline = vi.hoisted(() => ({
@@ -390,6 +391,88 @@ describe("VideoPlayer native HLS timeline", () => {
     expect(video.currentTime).toBe(7);
     expect(subtitleTimeline.textOffsetSeconds).toBe(0);
     expect(subtitleTimeline.assOffsetSeconds).toBe(0);
+  });
+});
+
+describe("VideoPlayer subtitle selection adoption", () => {
+  const sidecarTrack: PlayerSubtitleInfo = {
+    index: 2,
+    media_file_id: 7,
+    track_id: "file:7:subtitle:2",
+    language: "en",
+    codec: "srt",
+    label: "English",
+    source: "external",
+    url: "/stream/session-1/subtitles/2.vtt",
+  };
+
+  beforeEach(() => {
+    controls.current = null;
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("keeps a manually selected SRT selected after the server adopts the selection", async () => {
+    const onSubtitleTrackChange = vi.fn();
+    const { rerenderPlayer } = renderPlayer({
+      subtitleUrls: [sidecarTrack],
+      onSubtitleTrackChange,
+    });
+
+    expect(controls.current?.activeSubtitleIndex).toBeNull();
+
+    act(() => {
+      controls.current?.onSubtitleSelect?.(2);
+    });
+
+    await waitFor(() => expect(onSubtitleTrackChange).toHaveBeenCalledWith(2, 0));
+    expect(controls.current?.activeSubtitleIndex).toBe(2);
+
+    // The server adopts: the fresh plan carries the selection with mode render.
+    const adoptedPlan = fixturePlanV3({
+      ...directPlan,
+      plan_id: "plan:adopted-22222222",
+      plan_attempt_key: "v3:adopted-22222222",
+      selected_tracks: { subtitle: { id: "file:7:subtitle:2", index: 2 } },
+      subtitle: { mode: "render", inventory: [] },
+    });
+    rerenderPlayer({ plan: adoptedPlan, planRevision: 2 });
+
+    await waitFor(() => expect(controls.current?.activeSubtitleIndex).toBe(2));
+    // No follow-up request: the adopted plan already matches the UI.
+    expect(onSubtitleTrackChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a manually selected SRT when the adopted plan carries no subtitle identity", async () => {
+    // A successful replan (a plan was adopted, no error) must never roll the
+    // menu back, even if the response does not reflect the selection in
+    // selected_tracks. Only a refusal surfaces an error state, and only that
+    // path is allowed to reset the UI.
+    const onSubtitleTrackChange = vi.fn();
+    const { rerenderPlayer } = renderPlayer({
+      subtitleUrls: [sidecarTrack],
+      onSubtitleTrackChange,
+    });
+
+    act(() => {
+      controls.current?.onSubtitleSelect?.(2);
+    });
+    await waitFor(() => expect(onSubtitleTrackChange).toHaveBeenCalledWith(2, 0));
+
+    const adoptedPlan = fixturePlanV3({
+      ...directPlan,
+      plan_id: "plan:adopted-33333333",
+      plan_attempt_key: "v3:adopted-33333333",
+    });
+    rerenderPlayer({ plan: adoptedPlan, planRevision: 2 });
+
+    await waitFor(() => expect(controls.current?.activeSubtitleIndex).toBe(2));
   });
 });
 
