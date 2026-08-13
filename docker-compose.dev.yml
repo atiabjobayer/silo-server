@@ -137,7 +137,11 @@ services:
     command: sh -c "pnpm install --frozen-lockfile --store-dir /pnpm/store && pnpm run dev -- --host 0.0.0.0"
     environment:
       VITE_API_PROXY_TARGET: http://silo:8080
-      VITE_HMR_CLIENT_PORT: "${PORT:-8090}"
+      # The port the BROWSER dials for Vite's HMR websocket. Behind a reverse
+      # proxy that terminates TLS on 443 this must be 443 (the page origin);
+      # set VITE_HMR_CLIENT_PORT=443 in .env. PORT only controls which host
+      # port the dev server is published on, so it must not force the HMR URL.
+      VITE_HMR_CLIENT_PORT: "${VITE_HMR_CLIENT_PORT:-8090}"
       PNPM_STORE_DIR: /pnpm/store
       CI: "true"
     ports:
