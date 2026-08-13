@@ -63,6 +63,12 @@ export default defineConfig(({ mode }) => {
           changeOrigin: !apiProxyIsLocal,
           secure: true,
           ws: true,
+          // Silo's websocket endpoints validate the browser Origin against the
+          // request Host or X-Forwarded-Host. With changeOrigin the Host is
+          // rewritten to the backend address, so also forward the original
+          // client-facing host; otherwise upgrades behind a TLS proxy
+          // (e.g. Cloudflare Flexible SSL) are rejected with 403.
+          xfwd: true,
         },
       },
     },
