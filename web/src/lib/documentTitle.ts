@@ -1,5 +1,5 @@
 /** Default app name, overridable by admin branding settings. */
-export let APP_DOCUMENT_TITLE = "Silo";
+export let APP_DOCUMENT_TITLE = "Penguin";
 
 /**
  * The label of the currently-mounted page (set by useDocumentTitle). Tracked

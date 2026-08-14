@@ -6,7 +6,7 @@ import { api } from "@/api/client";
 import { themeKeys } from "@/hooks/queries/keys";
 import { setAppDocumentTitle } from "@/lib/documentTitle";
 
-const DEFAULT_SERVER_NAME = "Silo";
+const DEFAULT_SERVER_NAME = "Penguin";
 const DEFAULT_LOGIN_SUBTITLE = "Sign in with an existing account.";
 
 /** Raw shape of GET /theme/branding. All fields optional / additive. */
