@@ -457,20 +457,25 @@ func (h *PlaybackHandler) handleStartPlaybackV3(w http.ResponseWriter, r *http.R
 		}
 	}
 	h.clarifyOriginalQuality4KTerminalV3(r.Context(), result.Terminal, requestedFile, !shouldTryAlternateFileV3(req.QualityPreference))
+	// The exact app identity is logged with every decision so a route or
+	// terminal reported against one build is attributable without asking the
+	// user which version they are running.
+	clientInfo := playbackClientInfoForStartV3(r, req.ClientPlaybackContext)
 	if result.Terminal != nil {
-		slog.InfoContext(r.Context(), "playback plan decided", "component", "playback",
+		slog.InfoContext(r.Context(), "playback plan decided", append([]any{
+			logComponentKey, "playback",
 			"outcome", "terminal",
 			"reason", result.Terminal.Reason,
 			"file_id", effectiveFile.ID,
 			"quality_preference", req.QualityPreference,
-		)
+		}, clientInfo.LogAttrs()...)...)
 		response, persistErr := h.persistTerminalStartDecisionV3(r.Context(), userID, profileID, req, requestDigests, requestedFile.ID, effectiveFile.ID, playback.NewTerminalResponseV3(result.Terminal.Reason, result.Terminal.Message, result.Terminal.Retryable))
 		if persistErr != nil {
 			writeStartAttemptPersistenceErrorV3(w, persistErr)
 			return
 		}
 		if response.Terminal != nil {
-			h.enqueueRouteEventV3(playback.RouteEventRecordV3{RouteEventV3: playback.RouteEventV3{ProtocolVersion: playback.ProtocolV3, PlaybackAttemptID: req.PlaybackAttemptID, Event: playback.RouteEventTerminalV3, FallbackReason: response.Terminal.Reason, OutputContextID: req.ClientPlaybackContext.Output.OutputContextID}, UserID: userID, ProfileID: profileID, ClientName: playbackClientInfoFromRequest(r).Name, ClientVersion: playbackClientInfoFromRequest(r).Version, ClientModel: req.ClientPlaybackContext.Device.Model})
+			h.enqueueRouteEventV3(playback.RouteEventRecordV3{RouteEventV3: playback.RouteEventV3{ProtocolVersion: playback.ProtocolV3, PlaybackAttemptID: req.PlaybackAttemptID, Event: playback.RouteEventTerminalV3, FallbackReason: response.Terminal.Reason, OutputContextID: req.ClientPlaybackContext.Output.OutputContextID}, UserID: userID, ProfileID: profileID, ClientName: clientInfo.Name, ClientVersion: clientInfo.Version, ClientBuild: clientInfo.Build, ClientChannel: clientInfo.Channel, ClientModel: req.ClientPlaybackContext.Device.Model})
 		}
 		writeJSON(w, http.StatusCreated, response)
 		return
@@ -478,7 +483,8 @@ func (h *PlaybackHandler) handleStartPlaybackV3(w http.ResponseWriter, r *http.R
 	// One line per plan decision so route selection is reconstructible from
 	// server logs alone (finding a mis-planned route previously required
 	// correlating client logcat, ffmpeg commands, and session rows).
-	slog.InfoContext(r.Context(), "playback plan decided", "component", "playback",
+	slog.InfoContext(r.Context(), "playback plan decided", append([]any{
+		logComponentKey, "playback",
 		"outcome", "plan",
 		"decision_reason", result.Plan.DecisionReason,
 		"delivery", result.Plan.Delivery,
@@ -491,9 +497,9 @@ func (h *PlaybackHandler) handleStartPlaybackV3(w http.ResponseWriter, r *http.R
 		"target_bitrate_kbps", result.TargetBitrateKbps,
 		"quality_preference", req.QualityPreference,
 		"bandwidth_estimate_kbps", intOrZeroHandlerV3(req.BandwidthEstimateKbps),
-	)
+	}, clientInfo.LogAttrs()...)...)
 	result.Plan.DegradationWarnings = append(result.Plan.DegradationWarnings, warnings...)
-	response, statusErr := h.startPlannedPlaybackV3(r, userID, profileID, req, requestDigests, requestedFile, effectiveFile, audioIndex, result)
+	response, statusErr := h.startPlannedPlaybackV3(r, userID, profileID, req, requestDigests, requestedFile, effectiveFile, audioIndex, result, clientInfo)
 	if statusErr != nil {
 		if statusErr.reason == "playback_attempt_reused" {
 			writeError(w, http.StatusConflict, "playback_attempt_reused", statusErr.message)
@@ -518,6 +524,70 @@ type playbackStartRequestDigestsV3 struct {
 	legacy  string
 }
 
+// playbackClientInfoForStartV3 resolves the client's app identity for a v3
+// start request. The X-Silo-Client-* headers win because they are present on
+// every request; the start body's client_playback_context is the fallback for
+// clients that report their app identity only there. All values stay opaque —
+// they are trimmed and length-clamped when the session stamps them.
+//
+// The fallback applies only to a client that named itself. client_playback_context
+// carries no app name, so nothing in the body can identify a nameless client
+// anyway — it is labeled from its user agent, and its app_version is a
+// free-form platform string rather than the marketing version client_version
+// promises. The web player, for one, reports the literal "web" there; taking it
+// unconditionally would write "web" into the one field that is contractually
+// semver, on every browser session.
+func playbackClientInfoForStartV3(r *http.Request, clientContext playback.ClientPlaybackContextV3) playback.ClientInfo {
+	info := playbackClientInfoFromRequest(r)
+	if info.Name == "" {
+		return info
+	}
+	if info.Version == "" {
+		info.Version = strings.TrimSpace(clientContext.AppVersion)
+	}
+	if info.Build == "" {
+		info.Build = strings.TrimSpace(clientContext.AppBuild)
+	}
+	if info.Channel == "" {
+		info.Channel = strings.TrimSpace(clientContext.AppChannel)
+	}
+	// The header half is already normalized; body-sourced values have to be
+	// clamped too before they reach the decision log and the route event.
+	return info.Normalized()
+}
+
+// playbackClientInfoWithSessionFallbackV3 completes a header-derived identity
+// from the session the event belongs to. Route events posted out of band carry
+// no client_playback_context, so without this a client that reports its build
+// only in the start body would attribute its plan_selected event to a build and
+// every later event of the same attempt to none.
+func (h *PlaybackHandler) playbackClientInfoWithSessionFallbackV3(sessionID string, info playback.ClientInfo) playback.ClientInfo {
+	if sessionID == "" || h.sessionMgr == nil {
+		return info
+	}
+	if info.Name != "" && info.Version != "" && info.Build != "" && info.Channel != "" {
+		return info
+	}
+	session, err := h.sessionMgr.GetSession(sessionID)
+	if err != nil || session == nil {
+		return info
+	}
+	stamped := session.ClientInfo()
+	if info.Name == "" {
+		info.Name = stamped.Name
+	}
+	if info.Version == "" {
+		info.Version = stamped.Version
+	}
+	if info.Build == "" {
+		info.Build = stamped.Build
+	}
+	if info.Channel == "" {
+		info.Channel = stamped.Channel
+	}
+	return info
+}
+
 // newPlaybackStartRequestDigestsV3 fingerprints both the body and normalized
 // device identity because either can change the selected playback plan. It
 // also retains the pre-device digest while attempts written by an older
@@ -538,7 +608,7 @@ func (d playbackStartRequestDigestsV3) matches(stored string) bool {
 	return stored == "" || stored == d.current || stored == d.legacy
 }
 
-func (h *PlaybackHandler) startPlannedPlaybackV3(r *http.Request, userID int, profileID string, req playback.StartRequestV3, requestDigests playbackStartRequestDigestsV3, requestedFile, effectiveFile *models.MediaFile, audioIndex int, result playback.PlannerResultV3) (playback.DecisionResponseV3, *transportErrorV3) {
+func (h *PlaybackHandler) startPlannedPlaybackV3(r *http.Request, userID int, profileID string, req playback.StartRequestV3, requestDigests playbackStartRequestDigestsV3, requestedFile, effectiveFile *models.MediaFile, audioIndex int, result playback.PlannerResultV3, clientInfo playback.ClientInfo) (playback.DecisionResponseV3, *transportErrorV3) {
 	if result.Plan == nil {
 		return playback.DecisionResponseV3{}, &transportErrorV3{reason: "internal_error", message: "The server produced no playback plan."}
 	}
@@ -551,15 +621,8 @@ func (h *PlaybackHandler) startPlannedPlaybackV3(r *http.Request, userID int, pr
 			return playback.DecisionResponseV3{}, &transportErrorV3{reason: reason, message: "The selected server adaptation is disabled for this user."}
 		}
 	}
-	clientInfo := playbackClientInfoFromRequest(r)
 	ctx := playback.WithClientInfo(r.Context(), clientInfo)
-	var session *playback.Session
-	var err error
-	if starter, ok := h.sessionMgr.(sessionStarterWithFilesContext); ok {
-		session, err = starter.StartSessionWithFilesContext(ctx, userID, profileID, effectiveFile.ID, requestedFile.ID, result.PlayMethod, result.TranscodeAudio)
-	} else {
-		session, err = h.sessionMgr.StartSessionWithFiles(userID, profileID, effectiveFile.ID, requestedFile.ID, result.PlayMethod, result.TranscodeAudio)
-	}
+	session, err := h.sessionMgr.StartSessionWithFilesContext(ctx, userID, profileID, effectiveFile.ID, requestedFile.ID, result.PlayMethod, result.TranscodeAudio)
 	if err != nil {
 		return playback.DecisionResponseV3{}, sessionStartErrorV3(err)
 	}
@@ -658,7 +721,7 @@ func (h *PlaybackHandler) startPlannedPlaybackV3(r *http.Request, userID int, pr
 	h.maybeQueueLazyPlaybackMarkers(r.Context(), session, effectiveFile)
 	h.persistSeriesSelectionsV3(r.Context(), userID, profileID, effectiveFile, plannedAudioTrackIndexV3(result, audioIndex))
 	h.syncSessionsNow(r.Context(), "v3_start")
-	h.enqueueRouteEventV3(playback.RouteEventRecordV3{RouteEventV3: playback.RouteEventV3{ProtocolVersion: playback.ProtocolV3, PlaybackAttemptID: req.PlaybackAttemptID, SessionID: session.ID, PlanID: result.Plan.PlanID, Event: playback.RouteEventPlanSelectedV3, AppliedQuirkIDs: appliedQuirkIDsV3(result.Plan), QuirkRegistryRevision: appliedQuirkRevisionV3(result.Plan), OutputContextID: req.ClientPlaybackContext.Output.OutputContextID}, UserID: userID, ProfileID: profileID, ClientName: clientInfo.Name, ClientVersion: clientInfo.Version, ClientModel: req.ClientPlaybackContext.Device.Model})
+	h.enqueueRouteEventV3(playback.RouteEventRecordV3{RouteEventV3: playback.RouteEventV3{ProtocolVersion: playback.ProtocolV3, PlaybackAttemptID: req.PlaybackAttemptID, SessionID: session.ID, PlanID: result.Plan.PlanID, Event: playback.RouteEventPlanSelectedV3, AppliedQuirkIDs: appliedQuirkIDsV3(result.Plan), QuirkRegistryRevision: appliedQuirkRevisionV3(result.Plan), OutputContextID: req.ClientPlaybackContext.Output.OutputContextID}, UserID: userID, ProfileID: profileID, ClientName: clientInfo.Name, ClientVersion: clientInfo.Version, ClientBuild: clientInfo.Build, ClientChannel: clientInfo.Channel, ClientModel: req.ClientPlaybackContext.Device.Model})
 	return response, nil
 }
 
@@ -2096,7 +2159,7 @@ func (h *PlaybackHandler) executeReplanV3(r *http.Request, record *playback.Atte
 			event = playback.RouteEventRuntimeCorrectionSucceededV3
 			clientModel = start.ClientPlaybackContext.Device.Model
 		}
-		h.enqueueRouteEventV3(playback.RouteEventRecordV3{RouteEventV3: playback.RouteEventV3{ProtocolVersion: playback.ProtocolV3, PlaybackAttemptID: req.PlaybackAttemptID, SessionID: session.ID, PlanID: result.Plan.PlanID, PlanAttemptID: req.PlanAttemptID, PlanAttemptKey: playback.PlanAttemptKeyV3(*result.Plan, start.ClientPlaybackContext.Output.OutputContextID, nil), Event: event, FallbackReason: req.Failure.Classification, AppliedQuirkIDs: appliedQuirkIDsV3(result.Plan), QuirkRegistryRevision: appliedQuirkRevisionV3(result.Plan), OutputContextID: start.ClientPlaybackContext.Output.OutputContextID}, UserID: session.UserID, ProfileID: session.ProfileID, ClientName: session.ClientName, ClientVersion: session.ClientVersion, ClientModel: clientModel})
+		h.enqueueRouteEventV3(playback.RouteEventRecordV3{RouteEventV3: playback.RouteEventV3{ProtocolVersion: playback.ProtocolV3, PlaybackAttemptID: req.PlaybackAttemptID, SessionID: session.ID, PlanID: result.Plan.PlanID, PlanAttemptID: req.PlanAttemptID, PlanAttemptKey: playback.PlanAttemptKeyV3(*result.Plan, start.ClientPlaybackContext.Output.OutputContextID, nil), Event: event, FallbackReason: req.Failure.Classification, AppliedQuirkIDs: appliedQuirkIDsV3(result.Plan), QuirkRegistryRevision: appliedQuirkRevisionV3(result.Plan), OutputContextID: start.ClientPlaybackContext.Output.OutputContextID}, UserID: session.UserID, ProfileID: session.ProfileID, ClientName: session.ClientName, ClientVersion: session.ClientVersion, ClientBuild: session.ClientBuild, ClientChannel: session.ClientChannel, ClientModel: clientModel})
 	}
 	transport.rollback = func() {
 		originalRollback()
@@ -2723,8 +2786,8 @@ func (h *PlaybackHandler) HandlePlaybackRouteEventV3(w http.ResponseWriter, r *h
 		return
 	}
 	event.Diagnostics = sanitizeDiagnosticsV3(event.Diagnostics)
-	client := playbackClientInfoFromRequest(r)
-	h.enqueueRouteEventV3(playback.RouteEventRecordV3{RouteEventV3: event, UserID: userID, ProfileID: profileID, ClientName: client.Name, ClientVersion: client.Version, ClientModel: event.Diagnostics["device_model"]})
+	client := h.playbackClientInfoWithSessionFallbackV3(firstNonEmptyValue(event.SessionID, identity.SessionID), playbackClientInfoFromRequest(r))
+	h.enqueueRouteEventV3(playback.RouteEventRecordV3{RouteEventV3: event, UserID: userID, ProfileID: profileID, ClientName: client.Name, ClientVersion: client.Version, ClientBuild: client.Build, ClientChannel: client.Channel, ClientModel: event.Diagnostics["device_model"]})
 	w.WriteHeader(http.StatusAccepted)
 }
 

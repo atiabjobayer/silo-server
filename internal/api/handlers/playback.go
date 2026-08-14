@@ -43,6 +43,11 @@ import (
 type SessionManagerInterface interface {
 	StartSession(userID int, profileID string, fileID int, method playback.PlayMethod, transcodeAudio bool) (*playback.Session, error)
 	StartSessionWithFiles(userID int, profileID string, effectiveFileID int, requestedFileID int, method playback.PlayMethod, transcodeAudio bool) (*playback.Session, error)
+	// StartSessionWithFilesContext is required rather than probed for at run
+	// time: the context is how the reporting client's identity reaches the new
+	// session, so an implementation without it would start sessions that
+	// silently carry no client name, version, build or channel.
+	StartSessionWithFilesContext(ctx context.Context, userID int, profileID string, effectiveFileID int, requestedFileID int, method playback.PlayMethod, transcodeAudio bool) (*playback.Session, error)
 	UpdateProgress(sessionID string, position float64, isPaused bool) error
 	UpdateAudioTrack(sessionID string, audioTrackIndex int, method playback.PlayMethod) error
 	UpdateStreamState(sessionID string, state playback.SessionStreamState) error
@@ -61,10 +66,6 @@ type SessionManagerInterface interface {
 	SetProgressPersistenceDisabled(sessionID string, disabled bool) error
 	StopSession(sessionID string) error
 	GetSession(sessionID string) (*playback.Session, error)
-}
-
-type sessionStarterWithFilesContext interface {
-	StartSessionWithFilesContext(ctx context.Context, userID int, profileID string, effectiveFileID int, requestedFileID int, method playback.PlayMethod, transcodeAudio bool) (*playback.Session, error)
 }
 
 type transcodePermissionChecker interface {
@@ -952,7 +953,9 @@ func (h *PlaybackHandler) handleExpiredSession(session *playback.Session) {
 	}
 	sessionCopy := *session
 	go func() {
-		slog.Info("expired inactive playback session", "session", sessionCopy.ID, "playback_session_id", sessionCopy.ID)
+		slog.Info("expired inactive playback session", append([]any{
+			"session", sessionCopy.ID, "playback_session_id", sessionCopy.ID,
+		}, sessionCopy.ClientInfo().LogAttrs()...)...)
 		// Expiry is a liveness reap, not a user stop — keep the recipe card so a
 		// resume reconstructs under the same id (the card's own TTL reaps it if
 		// the session is truly abandoned).
@@ -1076,11 +1079,18 @@ func playbackClientInfoFromRequest(r *http.Request) playback.ClientInfo {
 	if r == nil {
 		return playback.ClientInfo{}
 	}
+	// Clamped here, at the boundary, rather than only where the session stamps
+	// them: the decision logs and playback_route_events are written from this
+	// value directly, so a client sending a header-sized build would otherwise
+	// reach both despite the published bound. Values stay opaque — trimmed and
+	// length-clamped, never parsed or validated against an enum.
 	return playback.ClientInfo{
-		Name:      strings.TrimSpace(r.Header.Get("X-Silo-Client")),
-		Version:   strings.TrimSpace(r.Header.Get("X-Silo-Client-Version")),
+		Name:      r.Header.Get("X-Silo-Client"),
+		Version:   r.Header.Get("X-Silo-Client-Version"),
+		Build:     r.Header.Get("X-Silo-Client-Build"),
+		Channel:   r.Header.Get("X-Silo-Client-Channel"),
 		UserAgent: r.UserAgent(),
-	}
+	}.Normalized()
 }
 
 // HandleUpdateProgress handles POST /playback/{session_id}/progress.

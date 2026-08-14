@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -26,6 +28,8 @@ type Session struct {
 	ClientIP             string // resolved client IP for the playback session
 	ClientName           string // reported playback client name, when available
 	ClientVersion        string // reported playback client version, when available
+	ClientBuild          string // opaque reported client build identifier, when available
+	ClientChannel        string // opaque reported client distribution channel, when available
 	ClientUserAgent      string // trimmed request user agent for the playback session
 	IsJellyfinCompat     bool   // immutable origin identity for Jellyfin compatibility sessions
 
@@ -147,10 +151,74 @@ type clientInfoContextKey struct{}
 // ClientInfo carries best-effort client metadata from request handling into
 // the playback session manager.
 type ClientInfo struct {
-	Name      string
-	Version   string
+	Name    string
+	Version string
+	// Build is the client's opaque per-platform build identifier (Android
+	// versionCode, Apple CFBundleVersion, …). The server never parses or
+	// compares it; it exists so an admin can name the exact build.
+	Build string
+	// Channel is the client's opaque distribution channel ("release", "beta",
+	// "sideload", "dev", …). Stored verbatim — deliberately not validated
+	// against an enum so a new channel needs no server change.
+	Channel   string
 	UserAgent string
 	IsCompat  bool
+}
+
+// Normalized returns the identity with every field trimmed and clamped to the
+// bound published for it (docs/settings-api.md, and maxLength in the v3 request
+// schemas). This is the single definition of those bounds, and callers apply it
+// at the request boundary: a session stamps normalized values, but the decision
+// logs and playback_route_events are written straight from the resolved
+// identity, so clamping only at session creation would let a client's oversized
+// header through to both.
+func (c ClientInfo) Normalized() ClientInfo {
+	c.Name = normalizeClientMetadataValue(c.Name, 128)
+	c.Version = normalizeClientMetadataValue(c.Version, 64)
+	c.Build = normalizeClientMetadataValue(c.Build, 64)
+	c.Channel = normalizeClientMetadataValue(c.Channel, 32)
+	c.UserAgent = normalizeClientMetadataValue(c.UserAgent, 512)
+	return c
+}
+
+// LogAttrs renders the app identity as slog key/value pairs, skipping the
+// fields the client did not report. This is the single definition of those log
+// keys — every playback decision and the session-expiry line share it, so a
+// rename cannot leave one surface keyed differently from another. Skipping
+// empty values matters as much: browsers and Jellyfin-ecosystem clients report
+// none of them, and opslog persists the attrs it is handed, so emitting four
+// empty keys per decision would grow /admin/logs for no diagnostic value.
+func (c ClientInfo) LogAttrs() []any {
+	attrs := make([]any, 0, 8)
+	for _, pair := range [...]struct{ key, value string }{
+		{"client_name", c.Name},
+		{"client_version", c.Version},
+		{"client_build", c.Build},
+		{"client_channel", c.Channel},
+	} {
+		if pair.value != "" {
+			attrs = append(attrs, pair.key, pair.value)
+		}
+	}
+	return attrs
+}
+
+// ClientInfo returns the app identity stamped on the session when it was
+// created. Surfaces that only hold a session — expiry logging, route events
+// posted out of band — recover the reporting client through this instead of
+// re-reading request headers that may no longer be present.
+func (s *Session) ClientInfo() ClientInfo {
+	if s == nil {
+		return ClientInfo{}
+	}
+	return ClientInfo{
+		Name:      s.ClientName,
+		Version:   s.ClientVersion,
+		Build:     s.ClientBuild,
+		Channel:   s.ClientChannel,
+		UserAgent: s.ClientUserAgent,
+		IsCompat:  s.IsJellyfinCompat,
+	}
 }
 
 // WithClientInfo stores playback client metadata on a context.
@@ -302,9 +370,41 @@ func (m *SessionManager) SetExpirationHook(fn func(*Session)) {
 }
 
 func normalizeClientMetadataValue(value string, maxLen int) string {
+	// A text column takes neither invalid UTF-8 nor a NUL, and Postgres refuses
+	// the whole statement for either. The per-node session upserts share one
+	// transaction, so a single malformed client string would stop that entire
+	// node from reconciling — not just its own row — until the session goes
+	// away. Both scrubs are needed: NUL is perfectly valid UTF-8, so
+	// ToValidUTF8 leaves it, and a v3 start body can carry one as the JSON
+	// escape (headers cannot — net/http rejects bytes below 0x20).
+	// Control characters are stripped wholesale rather than just NUL: none of
+	// them belong in an identity label rendered in the admin UI and written to
+	// structured logs.
+	if !utf8.ValidString(value) {
+		value = strings.ToValidUTF8(value, "")
+	}
+	if strings.ContainsFunc(value, unicode.IsControl) {
+		value = strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return -1
+			}
+			return r
+		}, value)
+	}
 	value = strings.TrimSpace(value)
-	if maxLen > 0 && len(value) > maxLen {
-		value = value[:maxLen]
+	if maxLen <= 0 || len(value) <= maxLen {
+		return value
+	}
+	// Clamp by runes, not bytes. These bounds are published to clients as JSON
+	// Schema maxLength, which counts characters — a byte clamp would silently
+	// cut a value the contract calls valid, and cutting mid-rune would produce
+	// exactly the invalid UTF-8 scrubbed above.
+	runes := 0
+	for offset := range value {
+		if runes == maxLen {
+			return value[:offset]
+		}
+		runes++
 	}
 	return value
 }
@@ -439,7 +539,10 @@ func newSession(
 	transcodeAudio bool,
 ) *Session {
 	now := time.Now()
-	clientInfo := ClientInfoFromContext(ctx)
+	// Normalize here as well as at the request boundary: identities also reach
+	// the manager from the Jellyfin and Audiobookshelf compat surfaces, which
+	// build a ClientInfo from their own header vocabularies.
+	clientInfo := ClientInfoFromContext(ctx).Normalized()
 	return &Session{
 		ID:                   uuid.New().String(),
 		UserID:               userID,
@@ -451,9 +554,11 @@ func newSession(
 		TranscodeAudio:       transcodeAudio,
 		Position:             0,
 		IsPaused:             false,
-		ClientName:           normalizeClientMetadataValue(clientInfo.Name, 128),
-		ClientVersion:        normalizeClientMetadataValue(clientInfo.Version, 64),
-		ClientUserAgent:      normalizeClientMetadataValue(clientInfo.UserAgent, 512),
+		ClientName:           clientInfo.Name,
+		ClientVersion:        clientInfo.Version,
+		ClientBuild:          clientInfo.Build,
+		ClientChannel:        clientInfo.Channel,
+		ClientUserAgent:      clientInfo.UserAgent,
 		IsJellyfinCompat:     clientInfo.IsCompat,
 		StartedAt:            now,
 		UpdatedAt:            now,
