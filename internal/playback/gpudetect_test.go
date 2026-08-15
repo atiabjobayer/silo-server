@@ -3,6 +3,7 @@ package playback
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -94,6 +95,17 @@ func TestExplicitNVENCBypassesFFmpegProbe(t *testing.T) {
 func TestResolveFFmpegPathTrimsWithoutCleaningRelativeExecutable(t *testing.T) {
 	if got := ResolveFFmpegPath(" ./ffmpeg "); got != "./ffmpeg" {
 		t.Fatalf("ResolveFFmpegPath() = %q, want ./ffmpeg", got)
+	}
+}
+
+func TestResolveFFmpegPathFallsBackWhenConfiguredAbsolutePathMissing(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "ffmpeg")
+	got := ResolveFFmpegPath(missing)
+	if got == missing {
+		t.Fatalf("ResolveFFmpegPath() returned the missing configured path %q", got)
+	}
+	if _, err := exec.LookPath(got); err != nil {
+		t.Fatalf("ResolveFFmpegPath() = %q, but it is not executable: %v", got, err)
 	}
 }
 

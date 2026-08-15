@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,15 +40,30 @@ func ffmpegBinary() string {
 }
 
 // ResolveFFmpegPath returns the ffmpeg binary the playback pipeline executes
-// for the given configured path: the configured path when set, otherwise the
-// process-global discovery (jellyfin-ffmpeg install, then PATH). Capability
-// probes must resolve through this same function so a feature advertised at
-// planning time is guaranteed present in the binary that later runs.
+// for the given configured path: the configured path when set and present,
+// otherwise the process-global discovery (jellyfin-ffmpeg install, then PATH).
+// A configured absolute path that does not exist — the common shape of a stale
+// default or a host that ships distro ffmpeg instead of jellyfin-ffmpeg — falls
+// back to discovery so one missing binary cannot disable the whole conversion
+// toolchain. Relative configured paths are kept verbatim: they are deliberate
+// working-directory choices. Capability probes must resolve through this same
+// function so a feature advertised at planning time is guaranteed present in
+// the binary that later runs.
 func ResolveFFmpegPath(configured string) string {
-	if configured = strings.TrimSpace(configured); configured != "" {
+	configured = strings.TrimSpace(configured)
+	if configured == "" {
+		return ffmpegBinary()
+	}
+	if !filepath.IsAbs(configured) {
 		return configured
 	}
-	return ffmpegBinary()
+	if _, err := exec.LookPath(configured); err == nil {
+		return configured
+	}
+	fallback := ffmpegBinary()
+	slog.Warn("configured ffmpeg path does not exist; falling back to the discovered binary",
+		"configured", configured, "resolved", fallback)
+	return fallback
 }
 
 // supportsDoviRPUFilter reports whether the given FFmpeg binary can strip

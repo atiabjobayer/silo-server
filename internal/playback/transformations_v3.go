@@ -3,6 +3,7 @@ package playback
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"os/exec"
 	"sort"
 	"strings"
@@ -27,13 +28,22 @@ func ProbeTransformationRegistryV3(ctx context.Context, ffmpegPath string) *Tran
 	// Resolve exactly like the execution paths (remux and transcode) so every
 	// capability advertised here holds for the binary that later runs.
 	ffmpegPath = ResolveFFmpegPath(ffmpegPath)
-	bsfCtx, cancelBSF := context.WithTimeout(ctx, 3*time.Second)
-	bsfs, _ := exec.CommandContext(bsfCtx, ffmpegPath, "-hide_banner", "-bsfs").Output()
+	bsfCtx, cancelBSF := context.WithTimeout(ctx, 5*time.Second)
+	bsfs, bsfErr := exec.CommandContext(bsfCtx, ffmpegPath, "-hide_banner", "-bsfs").Output()
 	cancelBSF()
-	encoderCtx, cancelEncoders := context.WithTimeout(ctx, 3*time.Second)
-	encoders, _ := exec.CommandContext(encoderCtx, ffmpegPath, "-hide_banner", "-encoders").Output()
+	encoderCtx, cancelEncoders := context.WithTimeout(ctx, 5*time.Second)
+	encoders, encoderErr := exec.CommandContext(encoderCtx, ffmpegPath, "-hide_banner", "-encoders").Output()
 	cancelEncoders()
 	_, ffmpegErr := exec.LookPath(ffmpegPath)
+	if ffmpegErr != nil || bsfErr != nil || encoderErr != nil {
+		slog.Warn("ffmpeg capability probe failed; HLS conversion capabilities stay degraded until the next restart",
+			"ffmpeg", ffmpegPath,
+			"lookpath_error", ffmpegErr,
+			"bsfs_error", bsfErr,
+			"encoders_error", encoderErr,
+			"bsfs_bytes", len(bsfs),
+			"encoders_bytes", len(encoders))
+	}
 	return NewTransformationRegistryV3([]TransformationSpecV3{
 		{Name: TransformationServerDV7HDR10V3, RecipeVersion: "1", Available: bytes.Contains(bsfs, []byte("dovi_rpu")), RequiredCapability: "ffmpeg_bsf:dovi_rpu", PromisedDynamicRange: DynamicRangeHDR10V3, ValidatedClaims: DV7ToHDR10ClaimsV3(), TerminalReason: TerminalDVConversionUnsupportedV3},
 		{Name: TransformationAudioToAACV3, RecipeVersion: "1", Available: ffmpegErr == nil && bytes.Contains(encoders, []byte(" aac ")), RequiredCapability: "ffmpeg_encoder:aac", ValidatedClaims: []string{ClaimAudioDecodeV3}, TerminalReason: TerminalAudioConversionUnsupportedV3},

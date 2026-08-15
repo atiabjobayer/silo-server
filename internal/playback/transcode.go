@@ -54,13 +54,18 @@ type TranscodeOpts struct {
 	// older/shared recipes that never resolved a copy seek anchor.
 	CopySeekAnchorResolved bool
 	TargetResolution       string // e.g., 1080p, 720p
-	TargetCodecVideo       string // e.g., h264 (or hevc if allowed)
-	TargetCodecAudio       string // e.g., aac
-	SegmentDuration        int    // seconds, default 6
-	StartSegmentNumber     int    // -hls_segment_start_number, default 0
-	FFmpegPath             string // optional explicit ffmpeg binary path
-	HWAccel                string // auto, qsv, vaapi, nvenc, none
-	HWDevice               string // e.g., /dev/dri/renderD128 (default if empty)
+	// NoUpscale caps any scale filter at the source height so the encoder
+	// never upscales. Set for dynamic sources (.strm) whose metadata was
+	// deferred: the planned rung may exceed the real source height, and
+	// upscaling wastes encoder throughput for no quality gain.
+	NoUpscale          bool
+	TargetCodecVideo   string // e.g., h264 (or hevc if allowed)
+	TargetCodecAudio   string // e.g., aac
+	SegmentDuration    int    // seconds, default 6
+	StartSegmentNumber int    // -hls_segment_start_number, default 0
+	FFmpegPath         string // optional explicit ffmpeg binary path
+	HWAccel            string // auto, qsv, vaapi, nvenc, none
+	HWDevice           string // e.g., /dev/dri/renderD128 (default if empty)
 	// AvoidHWDevice asks the initial multi-device allocator to prefer any other
 	// present render device. It is a process-local startup hint used after an
 	// early GPU failure; the selected concrete device remains fully reserved and
@@ -828,9 +833,9 @@ func appendVideoFilterArgs(args []string, opts TranscodeOpts) []string {
 	case opts.SubtitleBurnIn && opts.SubtitleTrackIndex >= 0:
 		return appendSubtitleBurnInArgs(args, opts)
 	case opts.HWAccel == "qsv" && opts.SoftwareVideoDecode:
-		return append(args, "-vf", qsvSoftwareDecodeFilter(opts.TargetResolution))
+		return append(args, "-vf", qsvSoftwareDecodeFilter(opts.TargetResolution, opts.NoUpscale))
 	case opts.HWAccel == "vaapi" && opts.SoftwareVideoDecode:
-		return append(args, "-vf", vaapiSoftwareDecodeFilter(opts.TargetResolution))
+		return append(args, "-vf", vaapiSoftwareDecodeFilter(opts.TargetResolution, opts.NoUpscale))
 	case opts.HWAccel == "qsv":
 		return append(args, "-vf", qsvScaleFilter(opts.TargetResolution))
 	case opts.HWAccel == "vaapi":
@@ -838,7 +843,7 @@ func appendVideoFilterArgs(args []string, opts TranscodeOpts) []string {
 	case opts.HWAccel == transcodeHWNVENC:
 		return append(args, "-vf", nvencScaleFilter(opts.TargetResolution))
 	case opts.TargetResolution != "":
-		if scale := resolutionToScale(opts.TargetResolution); scale != "" {
+		if scale := resolutionToScale(opts.TargetResolution, opts.NoUpscale); scale != "" {
 			return append(args, "-vf", scale)
 		}
 	}
@@ -961,7 +966,7 @@ func appendBitmapSubtitleBurnInArgs(args []string, opts TranscodeOpts) []string 
 		// fragment (subtitle input + optional post-scale) once, then wire it into
 		// the encode-specific pipeline.
 		cpuFilters := subInput + "overlay=eof_action=pass"
-		if scale := resolutionToScale(opts.TargetResolution); scale != "" {
+		if scale := resolutionToScale(opts.TargetResolution, opts.NoUpscale); scale != "" {
 			cpuFilters += "," + scale
 		}
 		if opts.HWAccel == transcodeHWNVENC {
@@ -982,7 +987,7 @@ func appendBitmapSubtitleBurnInArgs(args []string, opts TranscodeOpts) []string 
 // counterpart of the all-hardware overlay_vaapi graph above.
 func softwareDecodedBitmapBurnInGraph(opts TranscodeOpts, subInput string, qsv bool) string {
 	filters := subInput + "overlay=eof_action=pass"
-	if scale := resolutionToScale(opts.TargetResolution); scale != "" {
+	if scale := resolutionToScale(opts.TargetResolution, opts.NoUpscale); scale != "" {
 		filters += "," + scale
 	}
 	filters += ",format=nv12,hwupload"
@@ -999,7 +1004,7 @@ func softwareDecodedBitmapBurnInGraph(opts TranscodeOpts, subInput string, qsv b
 // For QSV/VAAPI, frames must be downloaded from hardware, processed on CPU,
 // then re-uploaded: hwdownload → format=yuv420p → [scale,] subtitles → hwupload → hwmap.
 func appendSubtitleBurnInArgs(args []string, opts TranscodeOpts) []string {
-	scale := resolutionToScale(opts.TargetResolution)
+	scale := resolutionToScale(opts.TargetResolution, opts.NoUpscale)
 	subtitleInputPath := opts.InputPath
 	if opts.subtitleFilterInputPath != "" {
 		subtitleInputPath = opts.subtitleFilterInputPath
@@ -1047,24 +1052,32 @@ func appendSubtitleBurnInArgs(args []string, opts TranscodeOpts) []string {
 	return args
 }
 
-// resolutionToScale returns an ffmpeg scale filter string for the target resolution.
-func resolutionToScale(res string) string {
+// resolutionToScale returns an ffmpeg scale filter string for the target
+// resolution. With noUpscale the scale is capped at the source's own height
+// so unknown-metadata sources are never upscaled; the escaped comma keeps the
+// min() expression inside the scale filter's graph syntax.
+func resolutionToScale(res string, noUpscale bool) string {
+	height := ""
 	switch res {
 	case "2160p":
-		return "scale=-2:2160"
+		height = "2160"
 	case "1080p":
-		return "scale=-2:1080"
+		height = "1080"
 	case "720p":
-		return "scale=-2:720"
+		height = "720"
 	case "480p":
-		return "scale=-2:480"
+		height = "480"
 	case "420p":
-		return "scale=-2:420"
+		height = "420"
 	case "328p":
-		return "scale=-2:328"
+		height = "328"
 	default:
 		return ""
 	}
+	if noUpscale {
+		return fmt.Sprintf("scale=-2:min(%s\\,ih)", height)
+	}
+	return "scale=-2:" + height
 }
 
 // qsvScaleFilter returns the VAAPI→QSV filter chain with optional resolution scaling.
@@ -1087,9 +1100,9 @@ func qsvScaleFilter(res string) string {
 	}
 }
 
-func qsvSoftwareDecodeFilter(res string) string {
+func qsvSoftwareDecodeFilter(res string, noUpscale bool) string {
 	cpuFilters := ""
-	if scale := resolutionToScale(res); scale != "" {
+	if scale := resolutionToScale(res, noUpscale); scale != "" {
 		cpuFilters = scale + ","
 	}
 	// High 10 AVC is decoded on the CPU. Scale those software frames before
@@ -1121,9 +1134,9 @@ func vaapiScaleFilter(res string) string {
 	}
 }
 
-func vaapiSoftwareDecodeFilter(res string) string {
+func vaapiSoftwareDecodeFilter(res string, noUpscale bool) string {
 	cpuFilters := ""
-	if scale := resolutionToScale(res); scale != "" {
+	if scale := resolutionToScale(res, noUpscale); scale != "" {
 		cpuFilters = scale + ","
 	}
 	return cpuFilters + "format=nv12,hwupload"
