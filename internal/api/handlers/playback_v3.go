@@ -1215,13 +1215,20 @@ func (h *PlaybackHandler) prepareLocalTransportV3(r *http.Request, session *play
 	sourceMetadata := sourceExecutionMetadataV3(file, result)
 	sourceProfile, sourceBitDepth := sourceVideoTranscodeFactsV3(file, result)
 	unlock := h.tm.LockSessionLifecycle(session.ID)
+	// Remote .strm sources can take far longer than a local file to produce
+	// their first segment: ffmpeg has to probe the remote container over the
+	// link's real throughput. Give dynamic sources the wider startup budget.
+	manifestStartupTimeout := playback.ManifestStartupTimeout
+	if strings.EqualFold(filepath.Ext(file.FilePath), ".strm") || strings.EqualFold(file.Container, "strm") {
+		manifestStartupTimeout = playback.ManifestStartupTimeoutStrm
+	}
 	opts := playback.TranscodeOpts{InputPath: file.FilePath, OutputDir: outputDir, OutputSubdir: outputSubdir, SessionID: session.ID, SourceVideoCodec: sourceMetadata.VideoCodec, SourceVideoProfile: sourceProfile, SourceVideoBitDepth: sourceBitDepth, SoftwareVideoDecode: sourceMetadata.SoftwareVideoDecode, VideoBitstreamFilter: videoBitstreamFilterForPlanV3(result.Plan), SeekSeconds: timeline.seekSeconds, StreamOriginSeconds: timeline.streamOriginSeconds, CopySeekAnchorResolved: timeline.copySeekAnchorResolved, StartSegmentNumber: timeline.startSegmentNumber, TargetResolution: result.TargetResolution, TargetCodecVideo: videoCodec, TargetCodecAudio: result.TargetAudioCodec, TargetAudioChannels: result.TargetAudioChannels, TargetAudioBitrateKbps: result.TargetAudioBitrateKbps, TargetBitrateKbps: result.TargetBitrateKbps, SegmentDuration: 2, FFmpegPath: cfg.FFmpegPath, HWAccel: cfg.HWAccel, HWDevice: cfg.HWDevice, AudioTrackIndex: plannedAudioTrackIndexV3(result, session.AudioTrackIndex), SubtitleTrackIndex: result.SubtitleTransportTrackIndex, SubtitleBurnIn: result.SubtitleBurnIn, SubtitleCodec: result.SubtitleCodec, TotalDuration: sourceMetadata.DurationSeconds, FastStart: true, NodeType: playbackNodeIntegratedV3, ExecutionMode: playbackNodeIntegratedV3, FFmpegLogSink: h.FFmpegLogSink}
 	ts, err := h.startLocalPlaybackTransport(r.Context(), opts)
 	if err != nil {
 		unlock()
 		return preparedTransportV3{}, &transportErrorV3{reason: transcodeStartFailedReasonV3, message: "Failed to start the playback transport.", retryable: true, cause: err}
 	}
-	if _, readyErr := ts.WaitForManifest(playback.ManifestStartupTimeout); readyErr != nil {
+	if _, readyErr := ts.WaitForManifest(manifestStartupTimeout); readyErr != nil {
 		wasRunning := ts.IsRunning()
 		failedDevice := ts.Opts().HWDevice
 		transportErr := manifestStartupTransportErrorV3(wasRunning, readyErr)
@@ -1248,7 +1255,7 @@ func (h *PlaybackHandler) prepareLocalTransportV3(r *http.Request, session *play
 			unlock()
 			return preparedTransportV3{}, &transportErrorV3{reason: transcodeStartFailedReasonV3, message: "Failed to start the playback transport.", retryable: true, cause: err}
 		}
-		if _, retryReadyErr := ts.WaitForManifest(playback.ManifestStartupTimeout); retryReadyErr != nil {
+		if _, retryReadyErr := ts.WaitForManifest(manifestStartupTimeout); retryReadyErr != nil {
 			transportErr = manifestStartupTransportErrorV3(ts.IsRunning(), retryReadyErr)
 			_ = ts.Close()
 			unlock()

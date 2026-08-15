@@ -199,6 +199,13 @@ const maxPersistedFFmpegChars = 2000
 // window before the caller reports a retryable startup timeout.
 const ManifestStartupTimeout = 30 * time.Second
 
+// ManifestStartupTimeoutStrm is the startup budget for dynamic remote sources
+// (.strm shortcuts): ffmpeg must probe the remote container and pull enough
+// media for the first segment over whatever the link delivers, which throttled
+// remote hosts make far slower than a local file. The wider window keeps a
+// slow-but-healthy remote start from being killed as a startup timeout.
+const ManifestStartupTimeoutStrm = 2 * time.Minute
+
 const (
 	maxSequentialMissingSegments = 2
 	activeSegmentWait            = 12 * time.Second
