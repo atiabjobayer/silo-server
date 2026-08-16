@@ -1,4 +1,3 @@
-package main
 // Command strmprobe-repair bulk-repairs placeholder metadata for .strm media
 // files by probing the remote URLs they point at and persisting the real
 // track metadata. It is the maintenance counterpart of the per-playback repair
