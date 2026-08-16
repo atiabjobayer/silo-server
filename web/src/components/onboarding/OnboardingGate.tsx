@@ -15,6 +15,13 @@ import { TourHost } from "./TourHost";
  * silences the web and vice versa). Renders children throughout — the tour
  * is an overlay, not a route, so nothing behind it unmounts.
  */
+/**
+ * TEMPORARY SKIP: suppress the first-run tour overlay without touching the
+ * gate logic below. Flip to false to restore the tour. The hooks stay intact
+ * so upstream changes merge cleanly.
+ */
+const SKIP_ONBOARDING_TOUR = true;
+
 export function OnboardingGate({ children }: { children: ReactNode }) {
   const { profile } = useAuth();
   const enabled = profile !== null;
@@ -44,9 +51,13 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
   return (
     <>
       {children}
-      {shouldShow && !suppressed && flow.data && flow.data.steps.length > 0 && (
-        <TourHost flow={flow.data} onDone={() => setDismissed(true)} />
-      )}
+      {!SKIP_ONBOARDING_TOUR &&
+        shouldShow &&
+        !suppressed &&
+        flow.data &&
+        flow.data.steps.length > 0 && (
+          <TourHost flow={flow.data} onDone={() => setDismissed(true)} />
+        )}
     </>
   );
 }

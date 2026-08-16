@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -92,6 +93,64 @@ func videoTracksMissingColorRange(tracks []models.VideoTrack) bool {
 	return false
 }
 
+// strmNeedsRemoteProbe reports whether a dynamic .strm source still carries
+// scan-time placeholder metadata (or no probe data at all) and should be
+// repaired by probing the remote URL it points at. A successful remote probe
+// stamps the row with ProbeSource "strm-remote" and the real track list.
+func strmNeedsRemoteProbe(file *models.MediaFile) bool {
+	if file == nil {
+		return false
+	}
+	if !strings.EqualFold(filepath.Ext(file.FilePath), ".strm") && !strings.EqualFold(file.Container, "strm") {
+		return false
+	}
+	if strings.EqualFold(file.ProbeSource, "strm-remote") && len(file.AudioTracks) > 0 {
+		return false
+	}
+	return true
+}
+
+// preferEnglishAudioDefaultStrm re-marks the default audio track for dynamic
+// sources whose container flags a non-English stream as default while an
+// English stream exists. Indian-release dual-audio encodes (Hindi + English)
+// otherwise start in the non-English dub for every client, which is almost
+// never the household's expectation. An explicit per-track selection and the
+// profile language preference still win over the stored default, so this only
+// changes the untouched fallback.
+func preferEnglishAudioDefaultStrm(probe *ProbeData) {
+	if probe == nil || len(probe.AudioTracks) < 2 {
+		return
+	}
+	englishIdx := -1
+	defaultIdx := -1
+	for i, track := range probe.AudioTracks {
+		if track.Default {
+			defaultIdx = i
+		}
+		if englishIdx < 0 && isEnglishAudioLanguage(track.Language) {
+			englishIdx = i
+		}
+	}
+	if englishIdx < 0 || defaultIdx < 0 || defaultIdx == englishIdx {
+		return
+	}
+	if isEnglishAudioLanguage(probe.AudioTracks[defaultIdx].Language) {
+		return
+	}
+	for i := range probe.AudioTracks {
+		probe.AudioTracks[i].Default = i == englishIdx
+	}
+}
+
+func isEnglishAudioLanguage(lang string) bool {
+	switch strings.ToLower(strings.TrimSpace(lang)) {
+	case "eng", "en", "en-us", "en-gb":
+		return true
+	default:
+		return false
+	}
+}
+
 // PlaybackProbeEnsurer repairs missing playback-critical probe metadata on
 // demand by running a local ffprobe and persisting the result.
 type PlaybackProbeEnsurer struct {
@@ -125,7 +184,10 @@ func (e *PlaybackProbeEnsurer) Ensure(ctx context.Context, file *models.MediaFil
 	}
 
 	current := file
-	if NeedsCriticalProbeRepair(file) && strings.TrimSpace(e.ffprobePath) != "" {
+	if strmNeedsRemoteProbe(file) {
+		current = e.ensureStrmProbe(ctx, file)
+	}
+	if NeedsCriticalProbeRepair(current) && strings.TrimSpace(e.ffprobePath) != "" {
 		timeout := e.timeout
 		if timeout <= 0 {
 			timeout = 5 * time.Second
@@ -152,6 +214,153 @@ func (e *PlaybackProbeEnsurer) Ensure(ctx context.Context, file *models.MediaFil
 	// already-probed file still needs its one-time multi-PPS scan before the
 	// planner can decide whether a video stream-copy is safe.
 	return e.ensureCopySafety(ctx, current)
+}
+
+// ensureStrmProbe repairs placeholder metadata for a dynamic .strm source by
+// probing the remote URL it points at once and persisting the result.
+// Scan-time remote probes can fail transiently (slow or throttled origins) and
+// fall back to a filename-derived placeholder that carries no real audio or
+// subtitle tracks — which silently removes track selection from playback and
+// item detail. The probe is bounded so a slow origin degrades to the existing
+// deferred-metadata HLS route instead of blocking the start, and a failed
+// persist still returns the repaired in-memory file so this request benefits.
+func (e *PlaybackProbeEnsurer) ensureStrmProbe(ctx context.Context, file *models.MediaFile) *models.MediaFile {
+	if !strmNeedsRemoteProbe(file) || strings.TrimSpace(e.ffprobePath) == "" {
+		return file
+	}
+	updated, ok, err := repairStrmProbeData(ctx, e.ffprobePath, file, e.timeout)
+	if err != nil || !ok || updated == nil {
+		return file
+	}
+	if e.fileRepo == nil {
+		return updated
+	}
+	repaired, persistErr := e.fileRepo.Upsert(ctx, *updated)
+	if persistErr != nil {
+		slog.WarnContext(ctx, ".strm remote probe repair failed to persist",
+			"component", "scanner", "file_id", file.ID, "error", persistErr)
+		return updated
+	}
+	slog.InfoContext(ctx, ".strm remote probe repaired playback metadata",
+		"component", "scanner", "file_id", file.ID,
+		"audio_tracks", len(repaired.AudioTracks), "video_tracks", len(repaired.VideoTracks))
+	return repaired
+}
+
+// repairStrmProbeData probes the remote URL of a dynamic .strm source and
+// returns a copy of the file with the real track metadata applied. It never
+// persists. The bool reports whether placeholder metadata was replaced.
+func repairStrmProbeData(ctx context.Context, ffprobePath string, file *models.MediaFile, timeout time.Duration) (*models.MediaFile, bool, error) {
+	if file == nil {
+		return nil, false, nil
+	}
+	streamURL, err := readStrmURL(file.FilePath)
+	if err != nil || strings.TrimSpace(streamURL) == "" {
+		return nil, false, err
+	}
+	// The probe's own tiered limits (12s/8s/5s) shrink within this ceiling.
+	if timeout < 12*time.Second {
+		timeout = 12 * time.Second
+	}
+	if timeout > 20*time.Second {
+		timeout = 20 * time.Second
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	probe, probeErr := ProbeRemoteURL(probeCtx, ffprobePath, streamURL)
+	cancel()
+	if probeErr != nil || probe == nil {
+		return nil, false, probeErr
+	}
+	preferEnglishAudioDefaultStrm(probe)
+	updated := *file
+	applyProbeData(&updated, probe, "strm-remote")
+	return &updated, true, nil
+}
+
+// RepairStrmProbeStats reports the outcome of a bulk .strm probe repair run.
+type RepairStrmProbeStats struct {
+	Scanned  int `json:"scanned"`
+	Repaired int `json:"repaired"`
+	Failed   int `json:"failed"`
+}
+
+// RepairStrmPlaceholderProbes re-probes the remote URLs of .strm files whose
+// metadata is still the scan-time placeholder and persists the real track
+// metadata. It is the bulk counterpart of the per-playback repair in
+// PlaybackProbeEnsurer: maintenance tooling (cmd/strmprobe-repair) runs it
+// once so a whole strm library gains accurate tracks without scanning or
+// playing every file. progress reports a snapshot after each worker finishes
+// a file; it is called from worker goroutines, so implementations must be
+// safe for concurrent use.
+func RepairStrmPlaceholderProbes(ctx context.Context, repo *FileRepository, ffprobePath string, workers, limit int, progress func(RepairStrmProbeStats)) (RepairStrmProbeStats, error) {
+	if repo == nil || repo.pool == nil {
+		return RepairStrmProbeStats{}, fmt.Errorf("file repository is unavailable")
+	}
+	if strings.TrimSpace(ffprobePath) == "" {
+		return RepairStrmProbeStats{}, fmt.Errorf("ffprobe path is required")
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	ids, err := repo.ListStrmPlaceholderIDs(ctx, limit)
+	if err != nil {
+		return RepairStrmProbeStats{}, err
+	}
+
+	work := make(chan int)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	stats := RepairStrmProbeStats{}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for id := range work {
+				if runCtx.Err() != nil {
+					continue
+				}
+				repaired := false
+				file, loadErr := repo.GetByID(runCtx, id)
+				if loadErr == nil && strmNeedsRemoteProbe(file) {
+					updated, ok, repairErr := repairStrmProbeData(runCtx, ffprobePath, file, 0)
+					if repairErr != nil {
+						slog.DebugContext(runCtx, "strm repair: remote probe failed", "component", "scanner", "file_id", id, "error", repairErr)
+					} else if ok && updated != nil {
+						if _, persistErr := repo.Upsert(runCtx, *updated); persistErr != nil {
+							slog.WarnContext(runCtx, "strm repair: persist failed", "component", "scanner", "file_id", id, "error", persistErr)
+						} else {
+							repaired = true
+						}
+					}
+				}
+				mu.Lock()
+				stats.Scanned++
+				if repaired {
+					stats.Repaired++
+				} else {
+					stats.Failed++
+				}
+				snapshot := stats
+				mu.Unlock()
+				if progress != nil {
+					progress(snapshot)
+				}
+			}
+		}()
+	}
+feed:
+	for _, id := range ids {
+		select {
+		case <-runCtx.Done():
+			break feed
+		case work <- id:
+		}
+	}
+	close(work)
+	wg.Wait()
+	return stats, nil
 }
 
 // ensureCopySafety computes the multi-PPS copy-safety flag for H.264 files at

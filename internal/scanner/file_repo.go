@@ -1943,6 +1943,40 @@ func (r *FileRepository) GetByPath(ctx context.Context, path string) (*models.Me
 	return scanMediaFile(r.pool.QueryRow(ctx, query, path))
 }
 
+// ListStrmPlaceholderIDs lists the primary keys of dynamic .strm files whose
+// probe metadata is still the scan-time placeholder (or absent entirely) and
+// therefore lacks the real audio/subtitle track lists. The bulk repair path
+// (RepairStrmPlaceholderProbes) walks these IDs; playback repairs the same
+// rows on demand via PlaybackProbeEnsurer.
+func (r *FileRepository) ListStrmPlaceholderIDs(ctx context.Context, limit int) ([]int, error) {
+	query := `SELECT id
+		FROM media_files
+		WHERE (file_path ILIKE '%.strm' OR lower(container) = 'strm')
+		  AND (probe_source IS NULL OR probe_source <> 'strm-remote')
+		ORDER BY id`
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := r.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("listing .strm placeholder files: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make([]int, 0)
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning .strm placeholder file: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating .strm placeholder files: %w", err)
+	}
+	return ids, nil
+}
+
 // IsActivePath reports whether path is the exact logical path of a media file
 // that is still active in the catalog. Scanner paths are authoritative here:
 // they deliberately preserve readable symlinks instead of replacing them with

@@ -3773,6 +3773,7 @@ func (s *Scanner) probeFile(ctx context.Context, filePath string) (*ProbeData, s
 			if streamURL, urlErr := readStrmURL(filePath); urlErr == nil {
 				probe, probeErr := ProbeRemoteURL(ctx, s.ffprobePath, streamURL)
 				if probeErr == nil && probe != nil {
+					preferEnglishAudioDefaultStrm(probe)
 					return probe, "strm-remote"
 				}
 				if probeErr != nil {
