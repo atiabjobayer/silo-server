@@ -2,8 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import QRCode from "react-qr-code";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import type { DeviceLoginPollResponse, DeviceLoginStartResponse, Profile } from "@/api/types";
+import type {
+  DeviceLoginPollResponse,
+  DeviceLoginStartResponse,
+  Profile,
+  SignupStatusResponse,
+} from "@/api/types";
 import { getBootstrapProfile, useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { PasswordInput } from "@/components/PasswordInput";
@@ -92,6 +98,13 @@ export default function Login() {
   useDocumentTitle("Sign In");
 
   const redirectTarget = sanitizeAuthRedirect(searchParams.get("redirect"));
+
+  // The signup link is only offered when public signups are enabled; the
+  // server answer is authoritative and shared with the signup page's check.
+  const signupStatusQuery = useQuery({
+    queryKey: ["auth", "signup-status"],
+    queryFn: () => api<SignupStatusResponse>("/auth/signup"),
+  });
 
   const credentialProviders = useMemo(
     () => providers.filter((entry) => entry.mode === "credentials"),
@@ -423,12 +436,14 @@ export default function Login() {
             </div>
           </div>
 
-          <p className="text-muted-foreground text-center text-sm">
-            Don&apos;t have an account?{" "}
-            <Link to={signupHref} className="text-foreground underline hover:no-underline">
-              Sign up
-            </Link>
-          </p>
+          {signupStatusQuery.data?.enabled && (
+            <p className="text-muted-foreground text-center text-sm">
+              Don&apos;t have an account?{" "}
+              <Link to={signupHref} className="text-foreground underline hover:no-underline">
+                Sign up
+              </Link>
+            </p>
+          )}
         </CardContent>
       </Card>
     </main>
