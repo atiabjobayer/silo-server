@@ -11,13 +11,21 @@ import (
 type Permission string
 
 const (
-	PermissionMarkerEdit       Permission = "marker_edit"
-	PermissionMetadataCuration Permission = "metadata_curation"
+	PermissionMarkerEdit         Permission = "marker_edit"
+	PermissionMetadataCuration   Permission = "metadata_curation"
+	PermissionWatchParty         Permission = "watch_party"
+	PermissionSettingsAppearance Permission = "settings_appearance"
+	PermissionSettingsHomeScreen Permission = "settings_home_screen"
+	PermissionSettingsLibraries  Permission = "settings_libraries"
 )
 
 var assignablePermissions = map[Permission]struct{}{
-	PermissionMarkerEdit:       {},
-	PermissionMetadataCuration: {},
+	PermissionMarkerEdit:         {},
+	PermissionMetadataCuration:   {},
+	PermissionWatchParty:         {},
+	PermissionSettingsAppearance: {},
+	PermissionSettingsHomeScreen: {},
+	PermissionSettingsLibraries:  {},
 }
 
 func assignablePermissionList() []string {

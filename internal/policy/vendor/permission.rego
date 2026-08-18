@@ -13,6 +13,10 @@ base_decision := acting_admin_decision(input) if {
 	input.permission == "marker_edit"
 } else := metadata_curation_decision(input) if {
 	input.permission == "metadata_curation"
+} else := watch_party_decision(input) if {
+	input.permission == "watch_party"
+} else := settings_home_screen_decision(input) if {
+	input.permission == "settings_home_screen"
 } else := deny("unknown permission", "unknown_permission")
 
 acting_admin_decision(i) := allow if {
@@ -28,6 +32,18 @@ marker_edit_decision(i) := allow if {
 } else := deny("user disabled", "user_disabled") if {
 	not user_enabled(i)
 } else := deny("marker edit permission required", "marker_edit_permission_required")
+
+watch_party_decision(i) := allow if {
+	effective_permission_allowed(i, "watch_party")
+} else := deny("user disabled", "user_disabled") if {
+	not user_enabled(i)
+} else := deny("watch party permission required", "watch_party_permission_required")
+
+settings_home_screen_decision(i) := allow if {
+	effective_permission_allowed(i, "settings_home_screen")
+} else := deny("user disabled", "user_disabled") if {
+	not user_enabled(i)
+} else := deny("home screen settings permission required", "settings_home_screen_permission_required")
 
 metadata_curation_decision(i) := allow if {
 	acting_admin_allowed(i)
@@ -74,6 +90,8 @@ target_libraries_allowed(i) if {
 
 assignable_permission("marker_edit")
 assignable_permission("metadata_curation")
+assignable_permission("watch_party")
+assignable_permission("settings_home_screen")
 
 assigned_permission(i, permission) if {
 	some idx

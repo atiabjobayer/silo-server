@@ -73,6 +73,11 @@ import { CURATED_THEME_IDS, THEMES } from "@/lib/themes";
 import { cn } from "@/lib/utils";
 import { useUICustomization } from "@/hooks/useUICustomization";
 import { menuItemKey } from "@/lib/uiCustomization";
+import {
+  hasPermission,
+  PERMISSION_WATCH_PARTY,
+  PERMISSION_SETTINGS_APPEARANCE,
+} from "@/lib/permissions";
 
 function getLibraryIcon(type: string) {
   switch (type) {
@@ -195,6 +200,10 @@ export default function AppSidebar({ onNavigate, collapsed = false }: AppSidebar
   const { profile } = useCurrentProfile();
   const { theme, setTheme, previewTheme, resetPreviewTheme } = useTheme();
   const showAdminNav = useIsActingAdmin();
+  const canUseWatchParty =
+    showAdminNav || hasPermission(user, PERMISSION_WATCH_PARTY, profile ?? null);
+  const canChangeTheme =
+    showAdminNav || hasPermission(user, PERMISSION_SETTINGS_APPEARANCE, profile ?? null);
   const { data: libraries } = useUserLibraries();
   const { pins } = useSidebarPins();
   const { togglePin, canToggle } = useToggleSidebarPin();
@@ -883,23 +892,25 @@ export default function AppSidebar({ onNavigate, collapsed = false }: AppSidebar
                   <SidebarLabel show={showLabels}>Watchlist</SidebarLabel>
                 </ViewTransitionLink>
               </li>
-              <li>
-                <ViewTransitionLink
-                  to="/rooms/join"
-                  onClick={onNavigate}
-                  className={navLinkClass("/rooms/join")}
-                  aria-current={isActive("/rooms/join") ? "page" : undefined}
-                >
-                  {isActive("/rooms/join") && (
-                    <span
-                      className="absolute top-1/2 left-0 h-[18px] w-[3px] -translate-y-1/2 rounded-r-sm"
-                      style={{ background: "var(--primary)" }}
-                    />
-                  )}
-                  <UsersRound className="h-[18px] w-[18px] shrink-0" />
-                  <SidebarLabel show={showLabels}>Watch Party</SidebarLabel>
-                </ViewTransitionLink>
-              </li>
+              {canUseWatchParty && (
+                <li>
+                  <ViewTransitionLink
+                    to="/rooms/join"
+                    onClick={onNavigate}
+                    className={navLinkClass("/rooms/join")}
+                    aria-current={isActive("/rooms/join") ? "page" : undefined}
+                  >
+                    {isActive("/rooms/join") && (
+                      <span
+                        className="absolute top-1/2 left-0 h-[18px] w-[3px] -translate-y-1/2 rounded-r-sm"
+                        style={{ background: "var(--primary)" }}
+                      />
+                    )}
+                    <UsersRound className="h-[18px] w-[18px] shrink-0" />
+                    <SidebarLabel show={showLabels}>Watch Party</SidebarLabel>
+                  </ViewTransitionLink>
+                </li>
+              )}
               <li>
                 <ViewTransitionLink
                   to="/collections"
@@ -1046,51 +1057,55 @@ export default function AppSidebar({ onNavigate, collapsed = false }: AppSidebar
                 </div>
               </DropdownMenuLabel>
 
-              <div
-                className="flex items-center justify-between gap-2 px-2.5 pt-1 pb-1.5"
-                role="group"
-                aria-label="Theme"
-              >
-                <span className="text-muted-foreground text-[10px] font-medium tracking-[0.14em] uppercase">
-                  Theme
-                </span>
-                <div className="flex items-center gap-1.5">
-                  {CURATED_THEME_IDS.map((id) => {
-                    const def = THEMES[id];
-                    const isActive = theme === id;
-                    return (
-                      <DropdownMenuItem
-                        key={id}
-                        onSelect={(event) => {
-                          event.preventDefault();
-                          setTheme(id);
-                        }}
-                        onMouseEnter={() => previewTheme(id)}
-                        onMouseLeave={resetPreviewTheme}
-                        onFocus={() => previewTheme(id)}
-                        onBlur={resetPreviewTheme}
-                        aria-label={def.label}
-                        title={def.label}
-                        className={cn(
-                          "relative h-6 w-6 flex-none cursor-pointer rounded-full border p-0 transition-transform hover:scale-110 focus:scale-110",
-                          isActive
-                            ? "ring-primary ring-offset-popover border-transparent ring-2 ring-offset-2"
-                            : "border-border/60",
-                        )}
-                        style={{ backgroundColor: def.previewBg }}
-                      >
-                        <span
-                          aria-hidden="true"
-                          className="absolute top-1/2 left-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full"
-                          style={{ backgroundColor: def.previewAccent }}
-                        />
-                      </DropdownMenuItem>
-                    );
-                  })}
-                </div>
-              </div>
+              {canChangeTheme && (
+                <>
+                  <div
+                    className="flex items-center justify-between gap-2 px-2.5 pt-1 pb-1.5"
+                    role="group"
+                    aria-label="Theme"
+                  >
+                    <span className="text-muted-foreground text-[10px] font-medium tracking-[0.14em] uppercase">
+                      Theme
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {CURATED_THEME_IDS.map((id) => {
+                        const def = THEMES[id];
+                        const isActive = theme === id;
+                        return (
+                          <DropdownMenuItem
+                            key={id}
+                            onSelect={(event) => {
+                              event.preventDefault();
+                              setTheme(id);
+                            }}
+                            onMouseEnter={() => previewTheme(id)}
+                            onMouseLeave={resetPreviewTheme}
+                            onFocus={() => previewTheme(id)}
+                            onBlur={resetPreviewTheme}
+                            aria-label={def.label}
+                            title={def.label}
+                            className={cn(
+                              "relative h-6 w-6 flex-none cursor-pointer rounded-full border p-0 transition-transform hover:scale-110 focus:scale-110",
+                              isActive
+                                ? "ring-primary ring-offset-popover border-transparent ring-2 ring-offset-2"
+                                : "border-border/60",
+                            )}
+                            style={{ backgroundColor: def.previewBg }}
+                          >
+                            <span
+                              aria-hidden="true"
+                              className="absolute top-1/2 left-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full"
+                              style={{ backgroundColor: def.previewAccent }}
+                            />
+                          </DropdownMenuItem>
+                        );
+                      })}
+                    </div>
+                  </div>
 
-              <DropdownMenuSeparator />
+                  <DropdownMenuSeparator />
+                </>
+              )}
 
               <DropdownMenuItem
                 onClick={() => {

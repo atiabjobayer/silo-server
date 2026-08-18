@@ -177,6 +177,56 @@ test_metadata_curation_non_primary_admin_allows_assigned_permission if {
 	got.allowed
 }
 
+test_watch_party_admin_implicit_grant if {
+	got := decision with input as object.union(base_input, {
+		"role": "admin",
+		"permission": "watch_party",
+	})
+	got.allowed
+}
+
+test_watch_party_assigned_grant if {
+	got := decision with input as object.union(base_input, {
+		"permission": "watch_party",
+		"assigned_permissions": ["watch_party"],
+	})
+	got.allowed
+}
+
+test_watch_party_rejects_missing_permission if {
+	got := decision with input as object.union(base_input, {
+		"permission": "watch_party",
+	})
+	not got.allowed
+	got.reason == "watch party permission required"
+	got.reason_code == "watch_party_permission_required"
+}
+
+test_settings_home_screen_admin_implicit_grant if {
+	got := decision with input as object.union(base_input, {
+		"role": "admin",
+		"permission": "settings_home_screen",
+	})
+	got.allowed
+}
+
+test_settings_home_screen_assigned_grant if {
+	got := decision with input as object.union(base_input, {
+		"permission": "settings_home_screen",
+		"assigned_permissions": ["settings_home_screen"],
+	})
+	got.allowed
+}
+
+test_settings_home_screen_rejects_missing_permission if {
+	got := decision with input as object.union(base_input, {
+		"permission": "settings_home_screen",
+	})
+	not got.allowed
+	got.reason == "home screen settings permission required"
+	got.reason_code == "settings_home_screen_permission_required"
+}
+
 test_unknown_permission_rejected if {
 	got := decision with input as object.union(base_input, {
 		"permission": "download_all_the_things",

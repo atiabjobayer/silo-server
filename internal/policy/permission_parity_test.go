@@ -21,10 +21,14 @@ func TestPermissionEffectivePermissionParity(t *testing.T) {
 		{name: "none"},
 		{name: "marker_edit", permissions: []string{string(auth.PermissionMarkerEdit)}},
 		{name: "both", permissions: []string{string(auth.PermissionMarkerEdit), string(auth.PermissionMetadataCuration)}},
+		{name: "watch_party", permissions: []string{string(auth.PermissionWatchParty)}},
+		{name: "settings_home_screen", permissions: []string{string(auth.PermissionSettingsHomeScreen)}},
 	}
 	permissions := []auth.Permission{
 		auth.PermissionMarkerEdit,
 		auth.PermissionMetadataCuration,
+		auth.PermissionWatchParty,
+		auth.PermissionSettingsHomeScreen,
 	}
 
 	for _, role := range []string{"admin", "user"} {
@@ -50,8 +54,22 @@ func TestPermissionEffectivePermissionParity(t *testing.T) {
 					}
 
 					gotEffective := policyEffectivePermissions(t, ctx, pdp, user)
-					wantEffective := auth.EffectivePermissions(user)
+					// wantEffective is scoped to the permissions the PDP actually
+					// dispatches on (permissions above), not auth.EffectivePermissions'
+					// full assignable set: settings_appearance and
+					// settings_libraries gate settings-values keys directly in
+					// Go rather than through a route-level PDP permission, so
+					// they have no Rego-side decision to compare against here.
+					var wantEffective []string
+					for _, permission := range permissions {
+						if auth.HasEffectivePermission(user, permission) {
+							wantEffective = append(wantEffective, string(permission))
+						}
+					}
 					sort.Strings(wantEffective)
+					if wantEffective == nil {
+						wantEffective = []string{}
+					}
 					if !reflect.DeepEqual(gotEffective, wantEffective) {
 						t.Fatalf("policy effective permissions = %#v, want %#v", gotEffective, wantEffective)
 					}
@@ -233,7 +251,12 @@ func permissionInputForUser(user *models.User, permission string) PermissionInpu
 func policyEffectivePermissions(t *testing.T, ctx context.Context, pdp *PDP, user *models.User) []string {
 	t.Helper()
 	var out []string
-	for _, permission := range []string{PermissionMarkerEdit, PermissionMetadataCuration} {
+	for _, permission := range []string{
+		PermissionMarkerEdit,
+		PermissionMetadataCuration,
+		PermissionWatchParty,
+		PermissionSettingsHomeScreen,
+	} {
 		decision, _, err := pdp.CheckPermission(ctx, permissionInputForUser(user, permission))
 		if err != nil {
 			t.Fatalf("CheckPermission(%s) error: %v", permission, err)

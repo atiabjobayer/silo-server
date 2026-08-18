@@ -14,6 +14,13 @@ import { queryClient } from "@/lib/query-client";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { useCurrentProfile } from "@/hooks/useCurrentProfile";
 import { useIsActingAdmin } from "@/hooks/useIsActingAdmin";
+import {
+  hasPermission,
+  PERMISSION_WATCH_PARTY,
+  PERMISSION_SETTINGS_APPEARANCE,
+  PERMISSION_SETTINGS_HOME_SCREEN,
+  PERMISSION_SETTINGS_LIBRARIES,
+} from "@/lib/permissions";
 import { ThemeProvider } from "@/hooks/useTheme";
 import { DateTimeFormatProvider, useDateTimeFormat } from "@/hooks/useDateTimeFormat";
 import { CustomThemeProvider } from "@/contexts/CustomThemeProvider";
@@ -214,6 +221,32 @@ function RequirePrimaryOrAdmin({ children }: { children: ReactNode }) {
   if (!actingAdmin && profile?.is_primary !== true) {
     return <Navigate to="/" replace />;
   }
+  return <>{children}</>;
+}
+
+/**
+ * Route guard for the per-user feature restrictions configurable on the
+ * Access tab (see lib/permissions and SettingsLayout's matching NavItem
+ * `restricted` field, which this mirrors so a hidden nav entry's URL can't
+ * be reached directly). `restricted="admin"` allows only while acting as
+ * admin; an assignable permission string additionally allows a profile the
+ * permission was granted to.
+ */
+function RequireFeatureAccess({
+  restricted,
+  redirectTo = "/settings",
+  children,
+}: {
+  restricted: "admin" | string;
+  redirectTo?: string;
+  children: ReactNode;
+}) {
+  const actingAdmin = useIsActingAdmin();
+  const { user } = useAuth();
+  const { profile } = useCurrentProfile();
+  const allowed =
+    actingAdmin || (restricted !== "admin" && hasPermission(user, restricted, profile ?? null));
+  if (!allowed) return <Navigate to={redirectTo} replace />;
   return <>{children}</>;
 }
 
@@ -478,9 +511,30 @@ function AppRoutes() {
                   }
                 >
                   <Route index element={null} />
-                  <Route path="appearance" element={<AppearanceSettings />} />
-                  <Route path="interface" element={<InterfaceSettings />} />
-                  <Route path="theme-editor" element={<ThemeEditorSettings />} />
+                  <Route
+                    path="appearance"
+                    element={
+                      <RequireFeatureAccess restricted={PERMISSION_SETTINGS_APPEARANCE}>
+                        <AppearanceSettings />
+                      </RequireFeatureAccess>
+                    }
+                  />
+                  <Route
+                    path="interface"
+                    element={
+                      <RequireFeatureAccess restricted="admin">
+                        <InterfaceSettings />
+                      </RequireFeatureAccess>
+                    }
+                  />
+                  <Route
+                    path="theme-editor"
+                    element={
+                      <RequireFeatureAccess restricted="admin">
+                        <ThemeEditorSettings />
+                      </RequireFeatureAccess>
+                    }
+                  />
                   <Route path="accessibility" element={<AccessibilitySettings />} />
                   <Route path="playback" element={<PlaybackSettings />} />
                   <Route
@@ -491,18 +545,60 @@ function AppRoutes() {
                       </RequirePrimaryOrAdmin>
                     }
                   />
-                  <Route path="libraries" element={<LibrarySettings />} />
-                  <Route path="history-import" element={<HistoryImportSettings />} />
+                  <Route
+                    path="libraries"
+                    element={
+                      <RequireFeatureAccess restricted={PERMISSION_SETTINGS_LIBRARIES}>
+                        <LibrarySettings />
+                      </RequireFeatureAccess>
+                    }
+                  />
+                  <Route
+                    path="history-import"
+                    element={
+                      <RequireFeatureAccess restricted="admin">
+                        <HistoryImportSettings />
+                      </RequireFeatureAccess>
+                    }
+                  />
                   <Route path="plex-webhooks" element={<LegacyWebhookSyncRedirect />} />
-                  <Route path="webhook-sync" element={<WebhookSyncSettings />} />
+                  <Route
+                    path="webhook-sync"
+                    element={
+                      <RequireFeatureAccess restricted="admin">
+                        <WebhookSyncSettings />
+                      </RequireFeatureAccess>
+                    }
+                  />
                   <Route path="watch-providers" element={<WatchProvidersSettings />} />
                   <Route path="subtitle-appearance" element={<SubtitleAppearanceSettings />} />
-                  <Route path="home-screen" element={<HomeScreenSettings />} />
-                  <Route path="card-overlays" element={<CardOverlaySettings />} />
+                  <Route
+                    path="home-screen"
+                    element={
+                      <RequireFeatureAccess restricted={PERMISSION_SETTINGS_HOME_SCREEN}>
+                        <HomeScreenSettings />
+                      </RequireFeatureAccess>
+                    }
+                  />
+                  <Route
+                    path="card-overlays"
+                    element={
+                      <RequireFeatureAccess restricted="admin">
+                        <CardOverlaySettings />
+                      </RequireFeatureAccess>
+                    }
+                  />
                   <Route path="personalize" element={<PersonalizeSettings />} />
                   <Route path="devices" element={<DeviceSettings />} />
                   <Route path="notifications" element={<NotificationsSettings />} />
-                  <Route path="connect-apps" element={<ConnectAppsSettings />} />
+                  <Route
+                    path="connect-apps"
+                    element={
+                      <RequireFeatureAccess restricted="admin">
+                        <ConnectAppsSettings />
+                      </RequireFeatureAccess>
+                    }
+                  />
                   <Route path="*" element={<Navigate to="/settings/playback" replace />} />
                 </Route>
                 <Route
@@ -527,8 +623,28 @@ function AppRoutes() {
                           <Route path="/browse" element={<LegacyBrowseRedirect />} />
                           <Route path="/item/:id" element={<ItemDetail />} />
                           <Route path="/person/:id" element={<PersonDetail />} />
-                          <Route path="/rooms/:roomId" element={<WatchTogetherRoomPage />} />
-                          <Route path="/rooms/join" element={<WatchTogetherJoin />} />
+                          <Route
+                            path="/rooms/:roomId"
+                            element={
+                              <RequireFeatureAccess
+                                restricted={PERMISSION_WATCH_PARTY}
+                                redirectTo="/"
+                              >
+                                <WatchTogetherRoomPage />
+                              </RequireFeatureAccess>
+                            }
+                          />
+                          <Route
+                            path="/rooms/join"
+                            element={
+                              <RequireFeatureAccess
+                                restricted={PERMISSION_WATCH_PARTY}
+                                redirectTo="/"
+                              >
+                                <WatchTogetherJoin />
+                              </RequireFeatureAccess>
+                            }
+                          />
                           <Route
                             path="/favorites"
                             element={<LegacyPersonalCatalogRedirect source="favorites" />}

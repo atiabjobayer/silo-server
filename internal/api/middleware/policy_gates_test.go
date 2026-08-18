@@ -228,6 +228,102 @@ func TestPolicyMarkerEditMiddlewareAppliesGroupPermissionMask(t *testing.T) {
 	}
 }
 
+func TestPolicyWatchPartyMiddlewareParity(t *testing.T) {
+	pdp := newMiddlewarePolicyPDP(t)
+	userErr := errors.New("user store down")
+
+	member := &models.User{ID: 7, Role: "user", Enabled: true, Permissions: []string{policy.PermissionWatchParty}}
+	noPermission := &models.User{ID: 7, Role: "user", Enabled: true, Permissions: nil}
+	disabledMember := &models.User{ID: 7, Role: "user", Enabled: false, Permissions: []string{policy.PermissionWatchParty}}
+	enabledAdmin := &models.User{ID: 7, Role: "admin", Enabled: true, Permissions: nil}
+
+	tests := []struct {
+		name    string
+		claims  *auth.Claims
+		user    *models.User
+		userErr error
+	}{
+		{name: "missing_claims"},
+		{name: "admin", claims: adminClaims(), user: enabledAdmin},
+		{name: "user_with_permission", claims: userClaims(), user: member},
+		{name: "user_without_permission", claims: userClaims(), user: noPermission},
+		{name: "user_disabled", claims: userClaims(), user: disabledMember},
+		{name: "user_loader_error", claims: userClaims(), userErr: userErr},
+		{name: "user_not_found", claims: userClaims(), user: nil},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			legacy := captureWatchPartyResponse(
+				NewPermissionMiddleware(
+					fakePermissionUserLoader{user: test.user, err: test.userErr},
+					nil,
+					nil,
+				),
+				test.claims,
+			)
+			policyBacked := captureWatchPartyResponse(
+				NewPolicyPermissionMiddleware(
+					fakePermissionUserLoader{user: test.user, err: test.userErr},
+					nil,
+					nil,
+					pdp,
+				),
+				test.claims,
+			)
+			assertMiddlewareResponsesEqual(t, policyBacked, legacy)
+		})
+	}
+}
+
+func TestPolicySettingsHomeScreenMiddlewareParity(t *testing.T) {
+	pdp := newMiddlewarePolicyPDP(t)
+	userErr := errors.New("user store down")
+
+	member := &models.User{ID: 7, Role: "user", Enabled: true, Permissions: []string{policy.PermissionSettingsHomeScreen}}
+	noPermission := &models.User{ID: 7, Role: "user", Enabled: true, Permissions: nil}
+	disabledMember := &models.User{ID: 7, Role: "user", Enabled: false, Permissions: []string{policy.PermissionSettingsHomeScreen}}
+	enabledAdmin := &models.User{ID: 7, Role: "admin", Enabled: true, Permissions: nil}
+
+	tests := []struct {
+		name    string
+		claims  *auth.Claims
+		user    *models.User
+		userErr error
+	}{
+		{name: "missing_claims"},
+		{name: "admin", claims: adminClaims(), user: enabledAdmin},
+		{name: "user_with_permission", claims: userClaims(), user: member},
+		{name: "user_without_permission", claims: userClaims(), user: noPermission},
+		{name: "user_disabled", claims: userClaims(), user: disabledMember},
+		{name: "user_loader_error", claims: userClaims(), userErr: userErr},
+		{name: "user_not_found", claims: userClaims(), user: nil},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			legacy := captureSettingsHomeScreenResponse(
+				NewPermissionMiddleware(
+					fakePermissionUserLoader{user: test.user, err: test.userErr},
+					nil,
+					nil,
+				),
+				test.claims,
+			)
+			policyBacked := captureSettingsHomeScreenResponse(
+				NewPolicyPermissionMiddleware(
+					fakePermissionUserLoader{user: test.user, err: test.userErr},
+					nil,
+					nil,
+					pdp,
+				),
+				test.claims,
+			)
+			assertMiddlewareResponsesEqual(t, policyBacked, legacy)
+		})
+	}
+}
+
 func TestPolicyMarkerEditMiddlewareEvalErrorIsInternal(t *testing.T) {
 	user := &models.User{ID: 7, Role: "user", Enabled: true, Permissions: []string{policy.PermissionMarkerEdit}}
 	rec := captureMarkerEditResponse(
@@ -318,6 +414,40 @@ func captureMarkerEditResponse(mw markerEditGate, claims *auth.Claims) middlewar
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	req := httptest.NewRequest(http.MethodPut, "/markers/files/5", nil)
+	if claims != nil {
+		req = req.WithContext(SetClaims(req.Context(), claims))
+	}
+	rec := httptest.NewRecorder()
+	next.ServeHTTP(rec, req)
+	return middlewareResponse{code: rec.Code, body: rec.Body.String()}
+}
+
+type watchPartyGate interface {
+	RequireWatchParty(http.Handler) http.Handler
+}
+
+func captureWatchPartyResponse(mw watchPartyGate, claims *auth.Claims) middlewareResponse {
+	next := mw.RequireWatchParty(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/watch-together/rooms", nil)
+	if claims != nil {
+		req = req.WithContext(SetClaims(req.Context(), claims))
+	}
+	rec := httptest.NewRecorder()
+	next.ServeHTTP(rec, req)
+	return middlewareResponse{code: rec.Code, body: rec.Body.String()}
+}
+
+type settingsHomeScreenGate interface {
+	RequireSettingsHomeScreen(http.Handler) http.Handler
+}
+
+func captureSettingsHomeScreenResponse(mw settingsHomeScreenGate, claims *auth.Claims) middlewareResponse {
+	next := mw.RequireSettingsHomeScreen(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodPut, "/profile/sections", nil)
 	if claims != nil {
 		req = req.WithContext(SetClaims(req.Context(), claims))
 	}

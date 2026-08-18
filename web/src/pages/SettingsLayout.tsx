@@ -31,6 +31,13 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useCurrentProfile } from "@/hooks/useCurrentProfile";
 import { useIsActingAdmin } from "@/hooks/useIsActingAdmin";
+import { useOptionalAuth } from "@/hooks/useAuth";
+import {
+  hasPermission,
+  PERMISSION_SETTINGS_APPEARANCE,
+  PERMISSION_SETTINGS_HOME_SCREEN,
+  PERMISSION_SETTINGS_LIBRARIES,
+} from "@/lib/permissions";
 import { resolveSettingsDocumentTitle } from "@/lib/documentTitle";
 import {
   countSettingsSearchItems,
@@ -46,6 +53,13 @@ interface NavItem {
   keywords?: readonly string[];
   settings?: readonly { label: string; description?: string; keywords?: readonly string[] }[];
   primaryOrAdmin?: boolean;
+  /**
+   * Feature-access restriction for the "User" role: "admin" hides the entry
+   * unless acting as admin (no per-user toggle); an assignable permission
+   * string hides it unless acting as admin or that permission is granted on
+   * the Access tab. See lib/permissions' hasPermission/isActingAdmin.
+   */
+  restricted?: "admin" | string;
 }
 
 interface NavSection {
@@ -192,6 +206,7 @@ const NAV_SECTIONS: NavSection[] = [
           "Current selection",
           "Reset to Cinema Dark",
         ),
+        restricted: PERMISSION_SETTINGS_APPEARANCE,
       },
       {
         path: "interface",
@@ -221,6 +236,7 @@ const NAV_SECTIONS: NavSection[] = [
           "Add to menu",
           "Reset to default",
         ),
+        restricted: "admin",
       },
       {
         path: "card-overlays",
@@ -236,6 +252,7 @@ const NAV_SECTIONS: NavSection[] = [
           "Position",
           "How styling works",
         ),
+        restricted: "admin",
       },
       {
         path: "accessibility",
@@ -252,6 +269,7 @@ const NAV_SECTIONS: NavSection[] = [
         description: "Fine-tune theme colors and add your own CSS.",
         keywords: ["design tokens", "token overrides", "custom css", "community themes"],
         settings: settingIndex("Preview", "Token Overrides", "Custom CSS", "Community Themes"),
+        restricted: "admin",
       },
     ],
   },
@@ -273,6 +291,7 @@ const NAV_SECTIONS: NavSection[] = [
           "Recently Added",
           "Library order",
         ),
+        restricted: PERMISSION_SETTINGS_HOME_SCREEN,
       },
       {
         path: "personalize",
@@ -304,6 +323,7 @@ const NAV_SECTIONS: NavSection[] = [
           "Forced subtitles",
           "Playback preferences",
         ),
+        restricted: PERMISSION_SETTINGS_LIBRARIES,
       },
     ],
   },
@@ -338,6 +358,7 @@ const NAV_SECTIONS: NavSection[] = [
           "A Jellyfin app says my username or password is wrong",
           "Every profile at a glance",
         ),
+        restricted: "admin",
       },
       {
         path: "watch-providers",
@@ -377,6 +398,7 @@ const NAV_SECTIONS: NavSection[] = [
           "Server URL",
           "Token",
         ),
+        restricted: "admin",
       },
       {
         path: "history-import",
@@ -394,6 +416,7 @@ const NAV_SECTIONS: NavSection[] = [
           "History",
           "Skipped",
         ),
+        restricted: "admin",
       },
     ],
   },
@@ -497,6 +520,7 @@ export default function SettingsLayout() {
   const [settingsSearch, setSettingsSearch] = useState("");
   const { profile } = useCurrentProfile();
   const actingAdmin = useIsActingAdmin();
+  const user = useOptionalAuth()?.user;
   const segments = location.pathname.split("/");
   const activeSegment = segments[2] || null;
   const canManageProfiles = actingAdmin || profile?.is_primary === true;
@@ -504,14 +528,20 @@ export default function SettingsLayout() {
   // A page that is itself two panes needs the room, so it opts out.
   const wideSetting = activeSegment ? WIDE_SETTINGS_PAGES.has(activeSegment) : false;
 
-  const visibleSections = useMemo(
-    () =>
-      NAV_SECTIONS.map((section) => ({
-        ...section,
-        items: section.items.filter((item) => !item.primaryOrAdmin || canManageProfiles),
-      })).filter((section) => section.items.length > 0),
-    [canManageProfiles],
-  );
+  const visibleSections = useMemo(() => {
+    const canAccess = (item: NavItem) => {
+      if (!item.restricted) return true;
+      if (actingAdmin) return true;
+      if (item.restricted === "admin") return false;
+      return hasPermission(user, item.restricted, profile ?? null);
+    };
+    return NAV_SECTIONS.map((section) => ({
+      ...section,
+      items: section.items.filter(
+        (item) => (!item.primaryOrAdmin || canManageProfiles) && canAccess(item),
+      ),
+    })).filter((section) => section.items.length > 0);
+  }, [canManageProfiles, actingAdmin, user, profile]);
 
   const flatItems = useMemo(
     () => visibleSections.flatMap((section) => section.items),

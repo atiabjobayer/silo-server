@@ -102,6 +102,40 @@ func routeValues(t *testing.T, h *SettingValuesHandler, method, key, query strin
 	return rec
 }
 
+// asAdmin elevates a request built by valuesRequest to acting-admin claims,
+// for tests whose settings key restrictedSettingKeys now gates — these tests
+// exist to cover scope/contract logic, not the restriction itself, so they
+// need to clear the access bar to reach that logic.
+func asAdmin(req *http.Request) *http.Request {
+	return req.WithContext(apimw.SetClaims(req.Context(), &auth.Claims{UserID: 1, Role: "admin"}))
+}
+
+// routeValuesAsAdmin is routeValues with acting-admin claims, for tests
+// against a key restrictedSettingKeys now gates — see asAdmin.
+func routeValuesAsAdmin(t *testing.T, h *SettingValuesHandler, method, key, query string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	target := "/settings/values/" + key
+	if query != "" {
+		target += "?" + query
+	}
+	req := asAdmin(valuesRequest(method, target, body))
+
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("key", key)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+
+	rec := httptest.NewRecorder()
+	switch method {
+	case http.MethodGet:
+		h.HandleGetValue(rec, req)
+	case http.MethodPut:
+		h.HandleSetValue(rec, req)
+	case http.MethodDelete:
+		h.HandleDeleteValue(rec, req)
+	}
+	return rec
+}
+
 func routeNavigationShortcutMutation(
 	t *testing.T,
 	h *SettingValuesHandler,
@@ -109,7 +143,10 @@ func routeNavigationShortcutMutation(
 	mutationID string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	req := valuesRequest(http.MethodPut, "/settings/values/nav.shortcuts/item", []byte(body))
+	// nav.shortcuts is admin-only in restrictedSettingKeys (part of the
+	// Navigation and Cards settings page), so every caller here needs the
+	// acting-admin bypass to exercise the mutation logic these tests target.
+	req := asAdmin(valuesRequest(http.MethodPut, "/settings/values/nav.shortcuts/item", []byte(body)))
 	if mutationID != "" {
 		req.Header.Set(mutationIDHeader, mutationID)
 	}
@@ -638,7 +675,7 @@ func TestProfileClientValueUsesExplicitFamilyHeader(t *testing.T) {
 	body := []byte(`{"value":{"items":[{"type":"builtin","destination":"home"},` +
 		`{"type":"library","library_id":42,"label":"Movies"}]}}`)
 
-	rec := routeValues(t, handler, http.MethodPut, key, "scope=profile_client", body)
+	rec := routeValuesAsAdmin(t, handler, http.MethodPut, key, "scope=profile_client", body)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT profile_client = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -713,11 +750,11 @@ func TestMutationHashPreservesExistingScopesAndSeparatesClientFamilies(t *testin
 func TestEffectiveClientFamilyIsOptionalButValidated(t *testing.T) {
 	handler, _ := newValuesTestHandler(t)
 	key := settingskeys.UiCardPresentation
-	if rec := routeValues(t, handler, http.MethodPut, key, "scope=profile",
+	if rec := routeValuesAsAdmin(t, handler, http.MethodPut, key, "scope=profile",
 		[]byte(`{"value":{"poster_size":"compact","caption":"title"}}`)); rec.Code != http.StatusOK {
 		t.Fatalf("seed profile fallback = %d: %s", rec.Code, rec.Body.String())
 	}
-	if rec := routeValues(t, handler, http.MethodPut, key, "scope=profile_client",
+	if rec := routeValuesAsAdmin(t, handler, http.MethodPut, key, "scope=profile_client",
 		[]byte(`{"value":{"poster_size":"large","caption":"artwork"}}`)); rec.Code != http.StatusOK {
 		t.Fatalf("seed family value = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -866,7 +903,7 @@ func TestSettingValuesRejectNonexistentLibraryContext(t *testing.T) {
 		t.Fatalf("nonexistent library left value (%+v, %v)", value, err)
 	}
 
-	if rec := routeValues(t, handler, http.MethodPut, "playback.subtitle_language",
+	if rec := routeValuesAsAdmin(t, handler, http.MethodPut, "playback.subtitle_language",
 		"scope=profile_library&library_id=7", []byte(`{"value":"de"}`)); rec.Code != http.StatusOK {
 		t.Errorf("existing library write = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -950,7 +987,7 @@ func TestLibraryAndSeriesScopesNeedTheirIdentity(t *testing.T) {
 		t.Errorf("series scope without series_id = %d, want 400", rec.Code)
 	}
 
-	if rec := routeValues(t, handler, http.MethodPut, "playback.subtitle_language",
+	if rec := routeValuesAsAdmin(t, handler, http.MethodPut, "playback.subtitle_language",
 		"scope=profile_library&library_id=7", []byte(`{"value":"de"}`)); rec.Code != http.StatusOK {
 		t.Errorf("library write = %d, want 200", rec.Code)
 	}
@@ -958,6 +995,77 @@ func TestLibraryAndSeriesScopesNeedTheirIdentity(t *testing.T) {
 		"scope=profile_series&series_id=s1", []byte(`{"value":"ja"}`)); rec.Code != http.StatusOK {
 		t.Errorf("series write = %d, want 200", rec.Code)
 	}
+}
+
+// fakeSettingsUserLookup backs the checkSettingWriteAccess permission branch
+// in tests below; the handler's UserRepo is otherwise unset in
+// newValuesTestHandler.
+type fakeSettingsUserLookup struct {
+	user *models.User
+}
+
+func (f fakeSettingsUserLookup) GetByID(context.Context, int) (*models.User, error) {
+	return f.user, nil
+}
+
+// TestRestrictedSettingKeysBlockNonAdminWrites covers checkSettingWriteAccess
+// directly: an admin-only key (part of a "Hidden" settings page) rejects a
+// plain user outright, a permission-gated key (part of an "FF=1" settings
+// page) rejects a user without that permission but allows one with it, and
+// the profile_library-only restriction on the shared playback-language keys
+// leaves their plain profile-scope write (the regular Playback Settings
+// page) unrestricted.
+func TestRestrictedSettingKeysBlockNonAdminWrites(t *testing.T) {
+	t.Run("admin-only key rejects plain user", func(t *testing.T) {
+		handler, _ := newValuesTestHandler(t)
+		rec := routeValues(t, handler, http.MethodPut, settingskeys.NavPrimaryMenu, "scope=profile_client",
+			[]byte(`{"value":{"items":[{"type":"builtin","destination":"home"}]}}`))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("admin-only key write by plain user = %d, want 403: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("permission-gated key rejects unassigned user", func(t *testing.T) {
+		handler, _ := newValuesTestHandler(t)
+		handler.UserRepo = fakeSettingsUserLookup{user: &models.User{ID: 1, Role: "user", Enabled: true}}
+		rec := routeValues(t, handler, http.MethodPut, settingskeys.UiTheme, "scope=profile",
+			[]byte(`{"value":"midnight-cinema"}`))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("settings_appearance key write by unassigned user = %d, want 403: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("permission-gated key allows assigned user", func(t *testing.T) {
+		handler, _ := newValuesTestHandler(t)
+		handler.UserRepo = fakeSettingsUserLookup{user: &models.User{
+			ID: 1, Role: "user", Enabled: true,
+			Permissions: []string{string(auth.PermissionSettingsAppearance)},
+		}}
+		rec := routeValues(t, handler, http.MethodPut, settingskeys.UiTheme, "scope=profile",
+			[]byte(`{"value":"midnight-cinema"}`))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("settings_appearance key write by assigned user = %d, want 200: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("profile_library-only restriction leaves plain profile scope open", func(t *testing.T) {
+		handler, _ := newValuesTestHandler(t)
+		rec := routeValues(t, handler, http.MethodPut, settingskeys.PlaybackAudioLanguage, "scope=profile",
+			[]byte(`{"value":"en"}`))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("plain-user profile-scope write = %d, want 200: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("profile_library scope of the same key is restricted", func(t *testing.T) {
+		handler, _ := newValuesTestHandler(t)
+		handler.SetLibraryLookup(settingValuesLibraryLookup{existing: map[int]bool{7: true}})
+		rec := routeValues(t, handler, http.MethodPut, settingskeys.PlaybackAudioLanguage,
+			"scope=profile_library&library_id=7", []byte(`{"value":"en"}`))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("plain-user profile_library-scope write = %d, want 403: %s", rec.Code, rec.Body.String())
+		}
+	})
 }
 
 // TestEffectiveResolvesThroughTheLadder proves the route is wired to the real

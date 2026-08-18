@@ -18,6 +18,8 @@ const (
 	activeProfileVerificationFailedMsg = "Failed to verify active profile"
 	metadataCurationRequiredMsg        = "Metadata curation permission required"
 	markerEditRequiredMsg              = "Marker editing permission required"
+	watchPartyRequiredMsg              = "Watch party permission required"
+	settingsHomeScreenRequiredMsg      = "Home screen settings permission required"
 )
 
 // PermissionDecider is the narrow policy decision interface used by route
@@ -271,6 +273,73 @@ func (m *PolicyPermissionMiddleware) RequireMarkerEdit(next http.Handler) http.H
 		}
 		if !decision.Allowed {
 			writeForbidden(w, markerEditRequiredMsg)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RequireWatchParty gates watch-party creation/join through the policy PDP,
+// mirroring RequireMarkerEdit's shape for a permission with no additional
+// resource-scoped logic.
+func (m *PolicyPermissionMiddleware) RequireWatchParty(next http.Handler) http.Handler {
+	return m.requireSimplePermission(policy.PermissionWatchParty, watchPartyRequiredMsg, next)
+}
+
+// RequireSettingsHomeScreen gates the home-screen settings save/reset
+// endpoints through the policy PDP, mirroring RequireMarkerEdit's shape.
+func (m *PolicyPermissionMiddleware) RequireSettingsHomeScreen(next http.Handler) http.Handler {
+	return m.requireSimplePermission(policy.PermissionSettingsHomeScreen, settingsHomeScreenRequiredMsg, next)
+}
+
+// requireSimplePermission is the shared PDP call for a permission with no
+// resource-scoped logic beyond the acting-admin bypass and an assigned
+// permission — RequireMarkerEdit predates this helper and keeps its own
+// inline copy rather than being refactored onto it incidentally here.
+func (m *PolicyPermissionMiddleware) requireSimplePermission(permission, deniedMessage string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims := GetClaims(r.Context())
+		if claims == nil {
+			writeUnauthorized(w, "Authentication required")
+			return
+		}
+		if m == nil || m.users == nil || m.pdp == nil {
+			writeForbidden(w, deniedMessage)
+			return
+		}
+
+		declaredProfileID, actingAsPrimary, err := resolveActingAdminFacts(r, claims.UserID, m.primaryChecker())
+		if err != nil {
+			writePermissionError(w, http.StatusInternalServerError, policyInternalErrorCode, activeProfileVerificationFailedMsg)
+			return
+		}
+		user, err := m.users.GetByID(r.Context(), claims.UserID)
+		if err != nil || user == nil || !user.Enabled {
+			writeForbidden(w, deniedMessage)
+			return
+		}
+		effective, err := access.EffectivePolicyForUser(r.Context(), user, m.groups)
+		if err != nil {
+			writeForbidden(w, deniedMessage)
+			return
+		}
+
+		decision, err := m.checkPermission(r, policy.PermissionInput{
+			UserID:              user.ID,
+			Role:                user.Role,
+			UserEnabled:         user.Enabled,
+			AssignedPermissions: slices.Clone(effective.Permissions),
+			Permission:          permission,
+			DeclaredProfileID:   declaredProfileID,
+			ActingAsPrimary:     actingAsPrimary,
+		})
+		if err != nil {
+			writePermissionError(w, http.StatusInternalServerError, policyInternalErrorCode, "Failed to verify permission")
+			return
+		}
+		if !decision.Allowed {
+			writeForbidden(w, deniedMessage)
 			return
 		}
 

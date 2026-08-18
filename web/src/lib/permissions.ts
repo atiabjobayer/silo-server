@@ -2,6 +2,10 @@ import type { Profile, User } from "@/api/types";
 
 export const PERMISSION_METADATA_CURATION = "metadata_curation";
 export const PERMISSION_MARKER_EDIT = "marker_edit";
+export const PERMISSION_WATCH_PARTY = "watch_party";
+export const PERMISSION_SETTINGS_APPEARANCE = "settings_appearance";
+export const PERMISSION_SETTINGS_HOME_SCREEN = "settings_home_screen";
+export const PERMISSION_SETTINGS_LIBRARIES = "settings_libraries";
 
 /**
  * Whether the account is currently acting with admin powers. Admin powers are

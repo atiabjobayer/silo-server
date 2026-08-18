@@ -366,6 +366,8 @@ func NewRouter(deps Dependencies) chi.Router {
 	var viewerAccessMiddleware *apimw.ViewerAccessMiddleware
 	var metadataCurationAccess func(http.Handler) http.Handler
 	var markerEditAccess func(http.Handler) http.Handler
+	var watchPartyAccess func(http.Handler) http.Handler
+	var homeScreenAccess func(http.Handler) http.Handler
 	var viewerResolver apimw.ViewerResolver
 	var profileTokenService *access.ProfileTokenService
 	var jwtService *auth.JWTService
@@ -458,6 +460,20 @@ func NewRouter(deps Dependencies) chi.Router {
 				permissionPDP,
 				accessGroupStore,
 			).RequireMarkerEdit
+			watchPartyAccess = apimw.NewPolicyPermissionMiddleware(
+				userRepo,
+				nil,
+				checkPrimaryProfile,
+				permissionPDP,
+				accessGroupStore,
+			).RequireWatchParty
+			homeScreenAccess = apimw.NewPolicyPermissionMiddleware(
+				userRepo,
+				nil,
+				checkPrimaryProfile,
+				permissionPDP,
+				accessGroupStore,
+			).RequireSettingsHomeScreen
 		} else {
 			// Legacy gate: proxy/test wiring without a policy system. Production integrated/api modes always take the policy path. Removed with the legacy cleanup phase.
 			markerEditAccess = apimw.NewPermissionMiddleware(
@@ -465,6 +481,16 @@ func NewRouter(deps Dependencies) chi.Router {
 				nil,
 				checkPrimaryProfile,
 			).RequireMarkerEdit
+			watchPartyAccess = apimw.NewPermissionMiddleware(
+				userRepo,
+				nil,
+				checkPrimaryProfile,
+			).RequireWatchParty
+			homeScreenAccess = apimw.NewPermissionMiddleware(
+				userRepo,
+				nil,
+				checkPrimaryProfile,
+			).RequireSettingsHomeScreen
 		}
 	}
 	if deps.SessionMgr != nil && userRepo != nil {
@@ -861,6 +887,7 @@ func NewRouter(deps Dependencies) chi.Router {
 				settingValuesHandler.UserRepo = userRepo
 			}
 			settingValuesHandler.ProfileTokens = profileTokenService
+			settingValuesHandler.SetActingAdminChecker(checkPrimaryProfile)
 			if deps.FolderRepo != nil {
 				settingValuesHandler.SetLibraryLookup(deps.FolderRepo)
 			} else if deps.DB != nil {
@@ -2009,6 +2036,7 @@ func NewRouter(deps Dependencies) chi.Router {
 				if deps.RateLimitMW != nil {
 					r.Use(deps.RateLimitMW.Handler)
 				}
+				r.Use(requireActingAdmin)
 				r.Get("/compat/connect-info", compatConnectInfoHandler.HandleGetConnectInfo)
 			})
 		}
@@ -2452,6 +2480,7 @@ func NewRouter(deps Dependencies) chi.Router {
 
 				if historyImportHandler != nil {
 					r.Route("/history-imports", func(r chi.Router) {
+						r.Use(requireActingAdmin)
 						r.Get("/sources", historyImportHandler.HandleListSources)
 						r.Post("/emby-connect/login", historyImportHandler.HandleLoginConnect)
 						r.Post("/plex/auth/pin", historyImportHandler.HandleCreatePlexPin)
@@ -2463,6 +2492,7 @@ func NewRouter(deps Dependencies) chi.Router {
 				}
 				if webhookSyncHandler != nil {
 					r.Route("/plex-sync", func(r chi.Router) {
+						r.Use(requireActingAdmin)
 						r.Get("/connections", webhookSyncHandler.HandleLegacyListConnections)
 						r.Post("/connections", webhookSyncHandler.HandleLegacyCreateConnection)
 						r.Delete("/connections/{id}", webhookSyncHandler.HandleLegacyDeleteConnection)
@@ -2471,6 +2501,7 @@ func NewRouter(deps Dependencies) chi.Router {
 						r.Put("/connections/{id}/actors", webhookSyncHandler.HandleLegacyUpdateActors)
 					})
 					r.Route("/webhook-sync", func(r chi.Router) {
+						r.Use(requireActingAdmin)
 						r.Get("/connections", webhookSyncHandler.HandleListConnections)
 						r.Post("/connections", webhookSyncHandler.HandleCreateConnection)
 						r.Put("/connections/{id}", webhookSyncHandler.HandleUpdateConnection)
@@ -2660,8 +2691,13 @@ func NewRouter(deps Dependencies) chi.Router {
 						r.Get("/rooms/{room_id}/ws", watchTogetherHandler.HandleRoomWebSocket)
 						r.Group(func(r chi.Router) {
 							r.Use(apimw.RequireProfile)
-							r.Post("/rooms", watchTogetherHandler.HandleCreateRoom)
-							r.Post("/join", watchTogetherHandler.HandleJoinRoom)
+							r.Group(func(r chi.Router) {
+								if watchPartyAccess != nil {
+									r.Use(watchPartyAccess)
+								}
+								r.Post("/rooms", watchTogetherHandler.HandleCreateRoom)
+								r.Post("/join", watchTogetherHandler.HandleJoinRoom)
+							})
 							r.Get("/rooms/{room_id}", watchTogetherHandler.HandleGetRoom)
 							r.Put("/rooms/{room_id}/selection", watchTogetherHandler.HandleSelectRoomItem)
 							r.Patch("/rooms/{room_id}/policy", watchTogetherHandler.HandleUpdateRoomPolicy)
@@ -2739,8 +2775,13 @@ func NewRouter(deps Dependencies) chi.Router {
 					r.Route("/profile/sections", func(r chi.Router) {
 						r.Use(apimw.RequireProfile)
 						r.Get("/", sectionHandler.HandleGetProfileOverrides)
-						r.Put("/", sectionHandler.HandleSaveProfileOverrides)
-						r.Delete("/reset", sectionHandler.HandleResetProfileOverrides)
+						r.Group(func(r chi.Router) {
+							if homeScreenAccess != nil {
+								r.Use(homeScreenAccess)
+							}
+							r.Put("/", sectionHandler.HandleSaveProfileOverrides)
+							r.Delete("/reset", sectionHandler.HandleResetProfileOverrides)
+						})
 						r.Get("/settings", sectionHandler.HandleSectionSettings)
 						if sectionSettingsHandler != nil {
 							r.Get("/flags", sectionSettingsHandler.HandleGetProfileFlag)

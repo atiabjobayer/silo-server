@@ -195,7 +195,7 @@ func RequireActingAdmin(checkPrimary PrimaryProfileChecker) func(http.Handler) h
 				return
 			}
 
-			allowed, err := actingAdminAllowed(r, claims.UserID, checkPrimary)
+			allowed, err := ActingAdminAllowed(r, claims.UserID, checkPrimary)
 			if err != nil {
 				writeInternalError(w, "Failed to verify active profile")
 				return
@@ -210,13 +210,18 @@ func RequireActingAdmin(checkPrimary PrimaryProfileChecker) func(http.Handler) h
 	}
 }
 
-// actingAdminAllowed reports whether an admin request may exercise admin
+// ActingAdminAllowed reports whether an admin request may exercise admin
 // powers given the profile it declares. Allowed when no checker is
 // configured, no profile is declared, or the declared profile is the
 // account's primary profile. A declared profile that cannot be resolved to
 // one of the caller's profiles fails closed: otherwise a non-primary session
 // could regain admin powers by sending a bogus X-Profile-Id.
-func actingAdminAllowed(r *http.Request, userID int, checkPrimary PrimaryProfileChecker) (bool, error) {
+//
+// Exported so callers outside this package that need the same acting-admin
+// bypass on a bar narrower than a whole route (e.g. one settings key among
+// many on a shared endpoint) can reuse it without depending on RequireActingAdmin's
+// route-middleware shape.
+func ActingAdminAllowed(r *http.Request, userID int, checkPrimary PrimaryProfileChecker) (bool, error) {
 	if checkPrimary == nil {
 		return true, nil
 	}

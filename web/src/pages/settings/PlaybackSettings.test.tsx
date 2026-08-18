@@ -60,6 +60,14 @@ vi.mock("@/hooks/queries/settingValues", async () => {
   };
 });
 
+// Maximum bitrate and Metadata language are admin-only fields (see
+// AdminUserDetail's Access tab); this suite covers the playback preference
+// logic itself, so it renders as an acting admin to keep those controls
+// present the way the rest of this file already exercises them.
+vi.mock("@/hooks/useIsActingAdmin", () => ({
+  useIsActingAdmin: () => true,
+}));
+
 import PlaybackSettings from "./PlaybackSettings";
 
 function capabilitiesAtRevision(revision: number): SettingsCapabilities {

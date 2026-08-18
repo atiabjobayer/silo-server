@@ -27,6 +27,7 @@ import {
 } from "@/hooks/queries/settingValues";
 import { useAutoPlayNextSetting } from "@/hooks/queries/autoPlayNext";
 import { useProfileDefaultWriter } from "@/hooks/queries/profileDefaults";
+import { useIsActingAdmin } from "@/hooks/useIsActingAdmin";
 import { toast } from "sonner";
 
 /**
@@ -70,6 +71,7 @@ const NO_BITRATE_LIMIT = "__no_limit__";
  * expressible instead of rendering as a disabled "custom" entry.
  */
 function QualitySetting() {
+  const isActingAdmin = useIsActingAdmin();
   const { data: effective } = useEffectiveSettings({
     keys: [SETTING_KEYS.PLAYBACK_PREFERRED_QUALITY, SETTING_KEYS.PLAYBACK_MAX_BITRATE_KBPS],
   });
@@ -116,41 +118,43 @@ function QualitySetting() {
         )}
       />
 
-      <SettingRow
-        label="Maximum bitrate"
-        description="Cap how much bandwidth playback may use. No limit means Silo picks for the chosen resolution."
-        control={(id) => (
-          <Select
-            value={bitrateValue === "" ? NO_BITRATE_LIMIT : bitrateValue}
-            disabled={isSaving}
-            onValueChange={(next) => {
-              // "No limit" clears the rows rather than storing a sentinel, so
-              // "no cap" stays the absence of a value at every layer. The reset
-              // clears the device row too — otherwise an override would keep
-              // capping playback after this control said it did not.
-              const request =
-                next === NO_BITRATE_LIMIT
-                  ? reset(SETTING_KEYS.PLAYBACK_MAX_BITRATE_KBPS)
-                  : save(SETTING_KEYS.PLAYBACK_MAX_BITRATE_KBPS, Number(next));
-              request.catch(() => toast.error("Failed to save maximum bitrate"));
-            }}
-          >
-            <SelectTrigger id={id} className="w-full sm:w-[220px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {bitrateChoices.map((choice) => (
-                <SelectItem
-                  key={choice.value || NO_BITRATE_LIMIT}
-                  value={choice.value === "" ? NO_BITRATE_LIMIT : choice.value}
-                >
-                  {choice.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-      />
+      {isActingAdmin && (
+        <SettingRow
+          label="Maximum bitrate"
+          description="Cap how much bandwidth playback may use. No limit means Silo picks for the chosen resolution."
+          control={(id) => (
+            <Select
+              value={bitrateValue === "" ? NO_BITRATE_LIMIT : bitrateValue}
+              disabled={isSaving}
+              onValueChange={(next) => {
+                // "No limit" clears the rows rather than storing a sentinel, so
+                // "no cap" stays the absence of a value at every layer. The reset
+                // clears the device row too — otherwise an override would keep
+                // capping playback after this control said it did not.
+                const request =
+                  next === NO_BITRATE_LIMIT
+                    ? reset(SETTING_KEYS.PLAYBACK_MAX_BITRATE_KBPS)
+                    : save(SETTING_KEYS.PLAYBACK_MAX_BITRATE_KBPS, Number(next));
+                request.catch(() => toast.error("Failed to save maximum bitrate"));
+              }}
+            >
+              <SelectTrigger id={id} className="w-full sm:w-[220px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {bitrateChoices.map((choice) => (
+                  <SelectItem
+                    key={choice.value || NO_BITRATE_LIMIT}
+                    value={choice.value === "" ? NO_BITRATE_LIMIT : choice.value}
+                  >
+                    {choice.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        />
+      )}
     </>
   );
 }
@@ -187,6 +191,7 @@ function AutoPlayNextSetting() {
 }
 
 export default function PlaybackSettings() {
+  const isActingAdmin = useIsActingAdmin();
   const capabilities = useSettingsCapabilities();
   const supportsIntroSkipMode = settingsCapabilitiesSupportKey(
     capabilities.data,
@@ -315,18 +320,20 @@ export default function PlaybackSettings() {
           )}
         />
 
-        <MetadataLanguageSetting
-          fallback={metadataLanguage}
-          overrides={normalizeMetadataLanguageOverrides(
-            read<unknown>(SETTING_KEYS.CATALOG_METADATA_LANGUAGE_OVERRIDES),
-          )}
-          languageOptions={metadataLanguageOptions}
-          disabled={pending}
-          onFallbackChange={(language) =>
-            saveValue(SETTING_KEYS.CATALOG_METADATA_LANGUAGE, language)
-          }
-          onOverridesChange={saveMetadataOverrides}
-        />
+        {isActingAdmin && (
+          <MetadataLanguageSetting
+            fallback={metadataLanguage}
+            overrides={normalizeMetadataLanguageOverrides(
+              read<unknown>(SETTING_KEYS.CATALOG_METADATA_LANGUAGE_OVERRIDES),
+            )}
+            languageOptions={metadataLanguageOptions}
+            disabled={pending}
+            onFallbackChange={(language) =>
+              saveValue(SETTING_KEYS.CATALOG_METADATA_LANGUAGE, language)
+            }
+            onOverridesChange={saveMetadataOverrides}
+          />
+        )}
 
         {introSkipControl === "mode" ? (
           <SettingRow

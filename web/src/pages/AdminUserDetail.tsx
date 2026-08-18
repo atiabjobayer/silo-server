@@ -67,6 +67,10 @@ import {
 import {
   PERMISSION_MARKER_EDIT,
   PERMISSION_METADATA_CURATION,
+  PERMISSION_WATCH_PARTY,
+  PERMISSION_SETTINGS_APPEARANCE,
+  PERMISSION_SETTINGS_HOME_SCREEN,
+  PERMISSION_SETTINGS_LIBRARIES,
   hasAssignedPermission,
   setAssignedPermission,
 } from "@/lib/permissions";
@@ -1048,6 +1052,10 @@ function EditUserForm({ user, onClose }: { user: AdminUser; onClose: () => void 
   const maxTranscodesId = useId();
   const markerEditId = useId();
   const metadataCurationId = useId();
+  const watchPartyId = useId();
+  const settingsAppearanceId = useId();
+  const settingsHomeScreenId = useId();
+  const settingsLibrariesId = useId();
   const updateMutation = useUpdateUser();
   const accessGroupValue = accessGroupID === null ? "none" : String(accessGroupID);
   const selectedGroupMissing =
@@ -1205,6 +1213,63 @@ function EditUserForm({ user, onClose }: { user: AdminUser; onClose: () => void 
                   )
                 }
               />
+            </div>
+            <div className="space-y-2">
+              <div className="text-sm font-medium">Feature Access</div>
+              <p className="text-muted-foreground text-xs">
+                Off by default for this role. An admin acting as admin always has these regardless
+                of these switches.
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="border-border flex items-center justify-between rounded-md border px-3 py-2">
+                  <Label htmlFor={watchPartyId}>Watch Party</Label>
+                  <Switch
+                    id={watchPartyId}
+                    checked={hasAssignedPermission(permissions, PERMISSION_WATCH_PARTY)}
+                    onCheckedChange={(checked) =>
+                      setPermissions((current) =>
+                        setAssignedPermission(current, PERMISSION_WATCH_PARTY, checked),
+                      )
+                    }
+                  />
+                </div>
+                <div className="border-border flex items-center justify-between rounded-md border px-3 py-2">
+                  <Label htmlFor={settingsAppearanceId}>Appearance Settings</Label>
+                  <Switch
+                    id={settingsAppearanceId}
+                    checked={hasAssignedPermission(permissions, PERMISSION_SETTINGS_APPEARANCE)}
+                    onCheckedChange={(checked) =>
+                      setPermissions((current) =>
+                        setAssignedPermission(current, PERMISSION_SETTINGS_APPEARANCE, checked),
+                      )
+                    }
+                  />
+                </div>
+                <div className="border-border flex items-center justify-between rounded-md border px-3 py-2">
+                  <Label htmlFor={settingsHomeScreenId}>Home Screen Settings</Label>
+                  <Switch
+                    id={settingsHomeScreenId}
+                    checked={hasAssignedPermission(permissions, PERMISSION_SETTINGS_HOME_SCREEN)}
+                    onCheckedChange={(checked) =>
+                      setPermissions((current) =>
+                        setAssignedPermission(current, PERMISSION_SETTINGS_HOME_SCREEN, checked),
+                      )
+                    }
+                  />
+                </div>
+                <div className="border-border flex items-center justify-between rounded-md border px-3 py-2">
+                  <Label htmlFor={settingsLibrariesId}>Libraries Settings</Label>
+                  <Switch
+                    id={settingsLibrariesId}
+                    checked={hasAssignedPermission(permissions, PERMISSION_SETTINGS_LIBRARIES)}
+                    onCheckedChange={(checked) =>
+                      setPermissions((current) =>
+                        setAssignedPermission(current, PERMISSION_SETTINGS_LIBRARIES, checked),
+                      )
+                    }
+                  />
+                </div>
+              </div>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               <div className="border-border flex items-center justify-between rounded-md border px-3 py-2">

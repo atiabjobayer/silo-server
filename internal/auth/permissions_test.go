@@ -29,6 +29,22 @@ func TestNormalizePermissions_RejectsUnknownPermission(t *testing.T) {
 	}
 }
 
+func TestNormalizePermissions_AcceptsFeatureAccessPermissions(t *testing.T) {
+	got, err := NormalizePermissions([]string{
+		"watch_party",
+		"settings_appearance",
+		"settings_home_screen",
+		"settings_libraries",
+	})
+	if err != nil {
+		t.Fatalf("NormalizePermissions returned error: %v", err)
+	}
+	want := []string{"settings_appearance", "settings_home_screen", "settings_libraries", "watch_party"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("permissions = %#v, want %#v", got, want)
+	}
+}
+
 func TestHasEffectivePermission_AdminImpliesAssignablePermissions(t *testing.T) {
 	user := &models.User{Role: "admin", Enabled: true}
 	if !HasEffectivePermission(user, PermissionMetadataCuration) {
@@ -47,6 +63,29 @@ func TestHasEffectivePermission_UserRequiresAssignedPermission(t *testing.T) {
 	user.Permissions = []string{"metadata_curation"}
 	if !HasEffectivePermission(user, PermissionMetadataCuration) {
 		t.Fatal("assigned user should have metadata curation")
+	}
+}
+
+func TestHasEffectivePermission_FeatureAccessPermissionsFollowAdminAndAssignedRules(t *testing.T) {
+	for _, permission := range []Permission{
+		PermissionWatchParty,
+		PermissionSettingsAppearance,
+		PermissionSettingsHomeScreen,
+		PermissionSettingsLibraries,
+	} {
+		admin := &models.User{Role: "admin", Enabled: true}
+		if !HasEffectivePermission(admin, permission) {
+			t.Fatalf("admin should have %s", permission)
+		}
+
+		plain := &models.User{Role: "user", Enabled: true}
+		if HasEffectivePermission(plain, permission) {
+			t.Fatalf("plain user should not have %s by default", permission)
+		}
+		plain.Permissions = []string{string(permission)}
+		if !HasEffectivePermission(plain, permission) {
+			t.Fatalf("assigned user should have %s", permission)
+		}
 	}
 }
 

@@ -53,7 +53,7 @@ func (m *PermissionMiddleware) RequireMetadataCurationForItem(next http.Handler)
 			if m != nil {
 				checkPrimary = m.checkPrimary
 			}
-			actingAdmin, err := actingAdminAllowed(r, claims.UserID, checkPrimary)
+			actingAdmin, err := ActingAdminAllowed(r, claims.UserID, checkPrimary)
 			if err != nil {
 				writePermissionError(w, http.StatusInternalServerError, "internal_error", "Failed to verify active profile")
 				return
@@ -130,6 +130,61 @@ func (m *PermissionMiddleware) RequireMarkerEdit(next http.Handler) http.Handler
 		user, err := m.users.GetByID(r.Context(), claims.UserID)
 		if err != nil || user == nil || !auth.HasEffectivePermission(user, auth.PermissionMarkerEdit) {
 			writeForbidden(w, "Marker editing permission required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RequireWatchParty is the legacy watch-party gate: admins pass by role,
+// everyone else needs the watch_party permission on their account. Proxy/test
+// wiring only — production takes the PDP-backed gate.
+func (m *PermissionMiddleware) RequireWatchParty(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims := GetClaims(r.Context())
+		if claims == nil {
+			writeUnauthorized(w, "Authentication required")
+			return
+		}
+		if claims.Role == "admin" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if m == nil || m.users == nil {
+			writeForbidden(w, "Watch party permission required")
+			return
+		}
+		user, err := m.users.GetByID(r.Context(), claims.UserID)
+		if err != nil || user == nil || !auth.HasEffectivePermission(user, auth.PermissionWatchParty) {
+			writeForbidden(w, "Watch party permission required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RequireSettingsHomeScreen is the legacy home-screen-settings gate: admins
+// pass by role, everyone else needs the settings_home_screen permission on
+// their account. Proxy/test wiring only — production takes the PDP-backed
+// gate.
+func (m *PermissionMiddleware) RequireSettingsHomeScreen(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims := GetClaims(r.Context())
+		if claims == nil {
+			writeUnauthorized(w, "Authentication required")
+			return
+		}
+		if claims.Role == "admin" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if m == nil || m.users == nil {
+			writeForbidden(w, "Home screen settings permission required")
+			return
+		}
+		user, err := m.users.GetByID(r.Context(), claims.UserID)
+		if err != nil || user == nil || !auth.HasEffectivePermission(user, auth.PermissionSettingsHomeScreen) {
+			writeForbidden(w, "Home screen settings permission required")
 			return
 		}
 		next.ServeHTTP(w, r)

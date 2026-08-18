@@ -1,10 +1,7 @@
-import { useState } from "react";
 import { Link } from "react-router";
-import { Sparkles, ArrowRight, Heart, Map } from "lucide-react";
+import { Sparkles, ArrowRight, Heart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useFavorites } from "@/hooks/queries/favorites";
-import { useOnboardingFlow } from "@/hooks/queries/onboarding";
-import { TourHost } from "@/components/onboarding/TourHost";
 
 /**
  * Re-entry point for the taste-seeding flow. Always links to /taste-seed —
@@ -14,9 +11,6 @@ import { TourHost } from "@/components/onboarding/TourHost";
 export default function PersonalizeSettings() {
   const { data: favorites } = useFavorites();
   const favoriteCount = favorites?.length ?? 0;
-  const [replaying, setReplaying] = useState(false);
-  // Fetch lazily: the flow only loads when the user asks for a replay.
-  const flow = useOnboardingFlow({ enabled: replaying });
 
   return (
     <div className="space-y-6">
@@ -49,30 +43,6 @@ export default function PersonalizeSettings() {
           </div>
         </div>
       </div>
-
-      <div className="surface-panel rounded-2xl border-0 p-6">
-        <div className="flex items-start gap-4">
-          <div className="bg-primary/10 text-primary flex h-12 w-12 shrink-0 items-center justify-center rounded-full">
-            <Map className="h-6 w-6" />
-          </div>
-          <div className="min-w-0 flex-1 space-y-3">
-            <div>
-              <h3 className="text-base font-semibold">Replay the feature tour</h3>
-              <p className="text-muted-foreground mt-1 text-sm">
-                A two-minute walkthrough of what this server can do — watch together, requests,
-                watchlists, and the playback settings worth knowing about.
-              </p>
-            </div>
-            <Button variant="outline" onClick={() => setReplaying(true)}>
-              Start the tour
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      {replaying && flow.data && flow.data.steps.length > 0 && (
-        <TourHost flow={flow.data} onDone={() => setReplaying(false)} />
-      )}
 
       <div className="text-muted-foreground flex items-center gap-2 px-2 text-sm">
         <Heart className="h-4 w-4" />

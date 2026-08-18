@@ -21,6 +21,7 @@ import (
 
 	"github.com/Silo-Server/silo-server/internal/access"
 	apimw "github.com/Silo-Server/silo-server/internal/api/middleware"
+	"github.com/Silo-Server/silo-server/internal/auth"
 	"github.com/Silo-Server/silo-server/internal/cache"
 	"github.com/Silo-Server/silo-server/internal/catalog"
 	evt "github.com/Silo-Server/silo-server/internal/events"
@@ -60,6 +61,11 @@ type SettingValuesHandler struct {
 	// simply unavailable — never that it is unguarded.
 	UserRepo      userLookup
 	ProfileTokens *access.ProfileTokenService
+
+	// checkPrimary backs the acting-admin bypass on restricted settings keys
+	// (see restrictedSettingKeys). Nil disables the profile check, matching
+	// apimw.RequireActingAdmin's behavior with no checker configured.
+	checkPrimary apimw.PrimaryProfileChecker
 }
 
 // languageSuggestionSource supplies the distinct original_language values the
@@ -87,6 +93,13 @@ func (h *SettingValuesHandler) SetLibraryLookup(lookup libraryLookup) {
 // that floor.
 func (h *SettingValuesHandler) SetLanguageSuggestionSource(source languageSuggestionSource) {
 	h.languageSource = source
+}
+
+// SetActingAdminChecker wires the primary-profile check restricted settings
+// keys use for the acting-admin bypass, mirroring apimw.RequireActingAdmin's
+// policy (role=admin on the account's primary profile).
+func (h *SettingValuesHandler) SetActingAdminChecker(checkPrimary apimw.PrimaryProfileChecker) {
+	h.checkPrimary = checkPrimary
 }
 
 // NewSettingValuesHandler builds the handler over the embedded contract.
@@ -428,6 +441,115 @@ func (h *SettingValuesHandler) HandleGetValues(w http.ResponseWriter, r *http.Re
 	})
 }
 
+// settingWriteRestriction gates one settings-values key's write endpoints
+// (Set/Delete/the atomic shortcut mutation) behind the acting-admin bypass or
+// a specific account permission. It exists at key granularity, not route
+// granularity, because several restricted settings pages (Playback's bitrate
+// and metadata-language fields, Navigation and Cards, Card Overlays, Theme
+// Editor, Appearance, Libraries) share this one generic endpoint with dozens
+// of unrestricted keys.
+type settingWriteRestriction struct {
+	// permission is nil for an admin-only key.
+	permission *auth.Permission
+	// profileLibraryOnly restricts the gate to scope=profile_library writes;
+	// the same key at plain profile scope stays open. Used for the four
+	// per-library playback override keys the Libraries page edits — the
+	// regular Playback Settings page writes the same keys at profile scope
+	// and must stay unrestricted.
+	profileLibraryOnly bool
+}
+
+var (
+	settingsAppearancePermission = auth.PermissionSettingsAppearance
+	settingsLibrariesPermission  = auth.PermissionSettingsLibraries
+)
+
+// restrictedSettingKeys lists every settings-values key that isn't open to
+// every profile. Reads are never restricted — only Set/Delete/shortcut
+// mutation consult this table, via checkSettingWriteAccess, so a restricted
+// profile's client can still render whatever value is already stored.
+var restrictedSettingKeys = map[string]settingWriteRestriction{
+	// Admin-only: no per-user toggle, visible only while acting as admin.
+	settingskeys.PlaybackMaxBitrateKbps:           {},
+	settingskeys.CatalogMetadataLanguage:          {},
+	settingskeys.CatalogMetadataLanguageOverrides: {},
+	settingskeys.NavPrimaryMenu:                   {},
+	settingskeys.NavShortcuts:                     {},
+	settingskeys.UiCardPresentation:               {},
+	settingskeys.UiCardOverlays:                   {},
+	settingskeys.UiCustomThemeVars:                {},
+	settingskeys.UiCustomCss:                      {},
+
+	// settings_appearance: also gates the sidebar theme picker (checked
+	// client-side; this is the matching server-side write gate). Text
+	// scale/weight/contrast live on the separate, unrestricted Accessibility
+	// page (AccessibilitySettings.tsx) and are deliberately not included here.
+	settingskeys.UiTheme:      {permission: &settingsAppearancePermission},
+	settingskeys.UiDateFormat: {permission: &settingsAppearancePermission},
+	settingskeys.UiTimeFormat: {permission: &settingsAppearancePermission},
+
+	// settings_libraries.
+	settingskeys.UiDisabledLibraryIds:        {permission: &settingsLibrariesPermission},
+	settingskeys.UiLibraryOrder:              {permission: &settingsLibrariesPermission},
+	settingskeys.UiRememberLibraryPageState:  {permission: &settingsLibrariesPermission},
+	settingskeys.UiLibraryPageState:          {permission: &settingsLibrariesPermission},
+	settingskeys.PlaybackAudioLanguage:       {permission: &settingsLibrariesPermission, profileLibraryOnly: true},
+	settingskeys.PlaybackSubtitleLanguage:    {permission: &settingsLibrariesPermission, profileLibraryOnly: true},
+	settingskeys.PlaybackSubtitleMode:        {permission: &settingsLibrariesPermission, profileLibraryOnly: true},
+	settingskeys.PlaybackShowForcedSubtitles: {permission: &settingsLibrariesPermission, profileLibraryOnly: true},
+}
+
+// checkSettingWriteAccess reports whether the current request may write
+// identity.Key, writing the 403 itself and returning false when it may not.
+// Callers use this only from the self-service Set/Delete/shortcut-mutation
+// handlers, after identity resolution — the admin-on-behalf-of-user settings
+// endpoints (settings_values_admin.go) call setValueAt/deleteValueAt
+// directly and are deliberately not subject to this restriction: an admin
+// managing a restricted user's settings from the admin panel is not the
+// thing being restricted.
+func (h *SettingValuesHandler) checkSettingWriteAccess(
+	w http.ResponseWriter, r *http.Request, identity userstore.SettingIdentity,
+) bool {
+	rule, restricted := restrictedSettingKeys[identity.Key]
+	if !restricted {
+		return true
+	}
+	if rule.profileLibraryOnly && identity.Scope != settingscontract.ScopeProfileLibrary {
+		return true
+	}
+
+	claims := apimw.GetClaims(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		return false
+	}
+
+	if claims.Role == "admin" {
+		allowed, err := apimw.ActingAdminAllowed(r, claims.UserID, h.checkPrimary)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Failed to verify active profile")
+			return false
+		}
+		if allowed {
+			return true
+		}
+		// Falls through: an admin acting on a non-primary profile is held to
+		// the same explicitly-assigned-permission bar as everyone else,
+		// mirroring RequireMetadataCurationForItem's non-primary handling.
+	}
+
+	if rule.permission == nil || h.UserRepo == nil {
+		writeError(w, http.StatusForbidden, "forbidden", "This setting requires admin access")
+		return false
+	}
+	user, err := h.UserRepo.GetByID(r.Context(), claims.UserID)
+	if err != nil || user == nil || !auth.HasAssignedPermission(user, *rule.permission) {
+		writeError(w, http.StatusForbidden, "forbidden", "This setting is not available on this account")
+		return false
+	}
+	return true
+}
+
 // HandleSetValue writes an explicit value at one scope.
 //
 // A value that exceeds a policy restriction is stored, not rejected: the
@@ -446,6 +568,9 @@ func (h *SettingValuesHandler) HandleSetValue(w http.ResponseWriter, r *http.Req
 	if identity.Key == settingskeys.NavShortcuts {
 		writeError(w, http.StatusBadRequest, "atomic_update_required",
 			navigationShortcutAtomicUpdateMessage)
+		return
+	}
+	if !h.checkSettingWriteAccess(w, r, identity) {
 		return
 	}
 	h.setValueAt(w, r, store, apimw.GetUserID(r.Context()), identity)
@@ -474,6 +599,9 @@ func (h *SettingValuesHandler) HandleSetNavigationShortcut(w http.ResponseWriter
 	}
 	if err := identity.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "X-Profile-Id header is required")
+		return
+	}
+	if !h.checkSettingWriteAccess(w, r, identity) {
 		return
 	}
 	def, ok := h.definitionFor(w, identity.Key)
@@ -1118,6 +1246,9 @@ func (h *SettingValuesHandler) HandleDeleteValue(w http.ResponseWriter, r *http.
 	if identity.Key == settingskeys.NavShortcuts {
 		writeError(w, http.StatusBadRequest, "atomic_update_required",
 			navigationShortcutAtomicUpdateMessage)
+		return
+	}
+	if !h.checkSettingWriteAccess(w, r, identity) {
 		return
 	}
 	h.deleteValueAt(w, r, store, apimw.GetUserID(r.Context()), identity)

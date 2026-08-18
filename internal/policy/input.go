@@ -21,6 +21,10 @@ const (
 	PermissionMarkerEdit = "marker_edit"
 	// PermissionMetadataCuration mirrors auth.PermissionMetadataCuration.
 	PermissionMetadataCuration = "metadata_curation"
+	// PermissionWatchParty mirrors auth.PermissionWatchParty.
+	PermissionWatchParty = "watch_party"
+	// PermissionSettingsHomeScreen mirrors auth.PermissionSettingsHomeScreen.
+	PermissionSettingsHomeScreen = "settings_home_screen"
 )
 
 // ScopeInput is the policy input document for resolving an authenticated
@@ -123,6 +127,8 @@ const (
 	ReasonCodeMarkerEditPermissionRequired = "marker_edit_permission_required"
 	ReasonCodeMetadataCurationRequired     = "metadata_curation_permission_required"
 	ReasonCodeItemOutsideUserLibraries     = "item_outside_user_libraries"
+	ReasonCodeWatchPartyPermissionRequired = "watch_party_permission_required"
+	ReasonCodeSettingsHomeScreenRequired   = "settings_home_screen_permission_required"
 
 	// Action decisions.
 	ReasonCodeUnknownAction                = "unknown_action"
