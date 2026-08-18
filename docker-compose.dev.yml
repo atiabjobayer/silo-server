@@ -142,6 +142,9 @@ services:
       # set VITE_HMR_CLIENT_PORT=443 in .env. PORT only controls which host
       # port the dev server is published on, so it must not force the HMR URL.
       VITE_HMR_CLIENT_PORT: "${VITE_HMR_CLIENT_PORT:-8090}"
+      # Set VITE_DISABLE_ERROR_OVERLAY=true in .env to suppress Vite's
+      # full-screen HMR error overlay on a shared dev deployment.
+      VITE_DISABLE_ERROR_OVERLAY: "${VITE_DISABLE_ERROR_OVERLAY:-}"
       PNPM_STORE_DIR: /pnpm/store
       CI: "true"
     ports:

@@ -10,6 +10,13 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const apiProxyTarget = env.VITE_API_PROXY_TARGET || "http://localhost:8090";
   const hmrClientPort = Number(env.VITE_HMR_CLIENT_PORT || "");
+  // Vite's full-screen HMR error overlay is useful locally but is disruptive
+  // on a shared dev deployment (e.g. docker-compose.dev.yml on a VPS), where
+  // any client-side exception blocks the whole UI behind a red overlay for
+  // every viewer until it's dismissed.
+  const disableErrorOverlay = ["1", "true", "yes"].includes(
+    (env.VITE_DISABLE_ERROR_OVERLAY || "").trim().toLowerCase(),
+  );
   // Vite only lets bare IPv4 hosts through unlisted, so a dev server reached by
   // name — the local mDNS name, or a Tailscale MagicDNS name when someone views
   // the dev UI from another device on the tailnet — has to be allowed here.
@@ -54,8 +61,13 @@ export default defineConfig(({ mode }) => {
       host: "0.0.0.0",
       allowedHosts,
       hmr:
-        Number.isFinite(hmrClientPort) && hmrClientPort > 0
-          ? { clientPort: hmrClientPort }
+        (Number.isFinite(hmrClientPort) && hmrClientPort > 0) || disableErrorOverlay
+          ? {
+              ...(Number.isFinite(hmrClientPort) && hmrClientPort > 0
+                ? { clientPort: hmrClientPort }
+                : {}),
+              ...(disableErrorOverlay ? { overlay: false } : {}),
+            }
           : undefined,
       proxy: {
         "/api": {
@@ -69,6 +81,16 @@ export default defineConfig(({ mode }) => {
           // client-facing host; otherwise upgrades behind a TLS proxy
           // (e.g. Cloudflare Flexible SSL) are rejected with 403.
           xfwd: true,
+          // http-proxy's xfwd only sets X-Forwarded-Host on plain HTTP
+          // requests — its websocket upgrade pass never adds it — so every
+          // proxied websocket still arrives at the backend without it. Set it
+          // by hand from the Host header this dev server actually received.
+          configure: (proxy) => {
+            proxy.on("proxyReqWs", (proxyReq, req) => {
+              const host = req.headers.host;
+              if (host) proxyReq.setHeader("x-forwarded-host", host);
+            });
+          },
         },
       },
     },

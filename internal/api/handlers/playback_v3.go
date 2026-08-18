@@ -804,12 +804,18 @@ func (h *PlaybackHandler) prepareTransportTimelineV3(ctx context.Context, sessio
 			if file == nil || strings.TrimSpace(file.FilePath) == "" {
 				return preparedTimelineV3{}, &transportErrorV3{reason: transcodeStartFailedReasonV3, message: "Failed to resolve remux seek position.", retryable: true, cause: errors.New("copy seek anchor requires a media file path")}
 			}
+			// .strm shortcuts store the shortcut file's own path in FilePath;
+			// ffprobe needs the remote URL it points to, the same resolution
+			// StartTranscode applies at the ffmpeg launch boundary.
+			probeInputPath, err := playback.ResolveTranscodeInputPath(file.FilePath)
+			if err != nil {
+				return preparedTimelineV3{}, &transportErrorV3{reason: transcodeStartFailedReasonV3, message: "Failed to resolve remux seek position.", retryable: true, cause: err}
+			}
 			resolver := h.copySeekAnchor
 			if resolver == nil {
 				resolver = playback.ResolveCopySeekAnchor
 			}
-			var err error
-			origin, startSegment, err = resolver(ctx, h.playbackConfig().FFmpegPath, file.FilePath, requested, 2)
+			origin, startSegment, err = resolver(ctx, h.playbackConfig().FFmpegPath, probeInputPath, requested, 2)
 			if err != nil {
 				slog.ErrorContext(ctx, "failed to resolve protocol v3 copy-video seek anchor",
 					"component", "api",
