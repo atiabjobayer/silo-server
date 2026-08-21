@@ -48,11 +48,13 @@ COPY migrations/ migrations/
 COPY contracts/ contracts/
 ARG BUILD_REVISION
 ARG BUILD_DIRTY=false
+ARG BUILD_NUMBER
+ARG BUILD_DATE
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     bash -c 'echo "==> go build: compiling $(go list ./... | wc -l | tr -d " ") repo packages" && \
     go build -v \
-    -ldflags "-X github.com/Silo-Server/silo-server/internal/buildinfo.revisionOverride=${BUILD_REVISION} -X github.com/Silo-Server/silo-server/internal/buildinfo.dirtyOverride=${BUILD_DIRTY}" \
+    -ldflags "-X github.com/Silo-Server/silo-server/internal/buildinfo.revisionOverride=${BUILD_REVISION} -X github.com/Silo-Server/silo-server/internal/buildinfo.dirtyOverride=${BUILD_DIRTY} -X github.com/Silo-Server/silo-server/internal/buildinfo.buildNumberOverride=${BUILD_NUMBER} -X github.com/Silo-Server/silo-server/internal/buildinfo.builtAtOverride=${BUILD_DATE}" \
     -o /silo ./cmd/silo/ && \
     echo "==> go build complete"'
 
@@ -62,9 +64,9 @@ ARG TARGETARCH
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates curl gnupg && \
     curl -fsSL https://repo.jellyfin.org/jellyfin_team.gpg.key \
-      | gpg --dearmor -o /usr/share/keyrings/jellyfin.gpg && \
+    | gpg --dearmor -o /usr/share/keyrings/jellyfin.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/jellyfin.gpg arch=${TARGETARCH}] https://repo.jellyfin.org/debian bookworm main" \
-      > /etc/apt/sources.list.d/jellyfin.list && \
+    > /etc/apt/sources.list.d/jellyfin.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends jellyfin-ffmpeg7 git libvips42 fonts-noto-core fonts-noto-cjk && \
     apt-get purge -y gnupg && apt-get autoremove -y && \

@@ -158,7 +158,8 @@ Response:
   "transcode_user_allowed": true,
   "season_download": true,
   "series_monitoring": true,
-  "monitoring_modes": ["all", "future", "latest_season", "specific_seasons"]
+  "monitoring_modes": ["all", "future", "latest_season", "specific_seasons"],
+  "proxy_delivery": true
 }
 ```
 
@@ -172,6 +173,7 @@ Response:
 | `season_download`        | Per-season batch downloads are available.                                         |
 | `series_monitoring`      | Auto-download subscriptions are available.                                        |
 | `monitoring_modes`       | Subscription modes the client may request.                                        |
+| `proxy_delivery`         | Proxy-aware download routes are mounted (§4.11); redirects are per-request.        |
 
 `quality_presets` is always an array — `[]` (never `null`) when downloads are
 disabled or the user lacks download permission — so clients can rely on
@@ -418,6 +420,33 @@ For browser-friendly links, the endpoint accepts the session access token as a
 > **Security note:** the query token is the session access token. Treat
 > direct-download URLs as secrets — they end up in browser history and proxy
 > logs. A short-lived download-scoped URL is a planned follow-up.
+
+### 4.11 Distributed proxy delivery
+
+`proxy_delivery` on the capability response reports whether the proxy-aware
+routes exist:
+
+```http
+GET  /api/v1/downloads/{id}/file-proxy
+HEAD /api/v1/downloads/{id}/file-proxy
+GET  /api/v1/direct-download-proxy?file_id={id}
+HEAD /api/v1/direct-download-proxy?file_id={id}
+```
+
+`true` means the routes are mounted, not that every request redirects. A
+proxy-aware route returns `307` to a proxy node when one is eligible for that
+file, and otherwise serves bytes directly with the same status-code contract as
+the non-proxy route. Bandwidth-limited downloads (server-wide or per-user) are
+never redirected, and neither are files no proxy node can reach. Clients must
+follow the redirect or accept the direct response; they cannot assume either.
+
+The established `/file` and `/direct-download` routes never redirect. When a
+prepared artifact for `/downloads/{id}/file` lives on a transcode node, the API
+relays it; the client sees an ordinary direct response. `/direct-download`
+serves source files only and has no artifact case.
+
+Treat proxy delivery as an advertised capability, not something inferred from a
+server version.
 
 ---
 
