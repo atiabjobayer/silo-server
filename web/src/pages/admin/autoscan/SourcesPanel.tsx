@@ -492,7 +492,7 @@ function RewriteEditor({
 
               {preview.unmatched.length > 0 && (
                 <CollapsibleList
-                  title={`No Silo match (${preview.unmatched.length})`}
+                  title={`No Penguin match (${preview.unmatched.length})`}
                   items={preview.unmatched}
                 />
               )}
@@ -1290,13 +1290,13 @@ function pluginKey(pluginId: string, capabilityId: string): string {
 /** Human wording for a delivery mode, used on the choice cards. */
 const DELIVERY_MODE_COPY: Record<AutoscanDeliveryMode, { title: string; description: string }> = {
   webhook: {
-    title: "The service tells Silo",
+    title: "The service tells Penguin",
     description:
       "Instant. Paste one URL into the service's webhook settings. No credentials stored here.",
   },
   poll: {
-    title: "Silo checks the service",
-    description: "Silo asks on a schedule. Works without changing anything upstream.",
+    title: "Penguin checks the service",
+    description: "Penguin asks on a schedule. Works without changing anything upstream.",
   },
 };
 
@@ -1480,7 +1480,7 @@ function AddSourceDialog({
           <DialogDescription>
             {createdWebhookSource
               ? "The source is created and listening. Paste this into your download manager to finish."
-              : "Pick what you want Silo to watch. Each source only asks for what it actually needs."}
+              : "Pick what you want Penguin to watch. Each source only asks for what it actually needs."}
           </DialogDescription>
         </DialogHeader>
 
@@ -1534,7 +1534,7 @@ function AddSourceDialog({
             <StepTrail steps={stepLabels} currentIndex={currentStepIndex} />
 
             <div className="space-y-2">
-              <Label>What should Silo watch?</Label>
+              <Label>What should Penguin watch?</Label>
               <div className="grid gap-2 sm:grid-cols-2">
                 {plugins.map((p) => {
                   const key = pluginKey(p.plugin_id, p.capability_id);
@@ -1562,7 +1562,7 @@ function AddSourceDialog({
 
             {showDeliveryChoice && (
               <div className="space-y-2">
-                <Label>How should Silo hear about changes?</Label>
+                <Label>How should Penguin hear about changes?</Label>
                 <div className="grid gap-2 sm:grid-cols-2">
                   {descriptor.delivery_modes.map((mode) => {
                     const copy = DELIVERY_MODE_COPY[mode];

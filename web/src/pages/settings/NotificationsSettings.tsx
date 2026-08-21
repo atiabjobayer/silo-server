@@ -421,7 +421,7 @@ function DiscordSection() {
   return (
     <SettingsGroup
       title="Discord Notifications"
-      description="Account-wide: the Silo bot sends direct messages covering every profile on this account. You must share a Discord server with the bot."
+      description="Account-wide: the Penguin bot sends direct messages covering every profile on this account. You must share a Discord server with the bot."
     >
       {!linked ? (
         <div className="flex items-center justify-between gap-3">
@@ -588,7 +588,7 @@ function WebPushSection() {
   return (
     <SettingsGroup
       title="Browser Notifications"
-      description="Get notified even when Silo is closed. Notifications are encrypted end-to-end — the browser vendor's push service never sees their content."
+      description="Get notified even when Penguin is closed. Notifications are encrypted end-to-end — the browser vendor's push service never sees their content."
     >
       {support === "unsupported" ? (
         <div className="text-muted-foreground text-sm">

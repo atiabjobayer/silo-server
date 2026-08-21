@@ -34,7 +34,7 @@ const SHARED_TRIGGERS: WebhookTrigger[] = [
   },
   {
     label: "On Rename",
-    reason: "Fires when files are renamed, so Silo does not lose track of them.",
+    reason: "Fires when files are renamed, so Penguin does not lose track of them.",
     required: false,
   },
 ];
@@ -43,7 +43,7 @@ const SONARR_TRIGGERS: WebhookTrigger[] = [
   ...SHARED_TRIGGERS,
   {
     label: "On Episode File Delete",
-    reason: "Lets Silo drop episodes you removed, instead of leaving dead entries.",
+    reason: "Lets Penguin drop episodes you removed, instead of leaving dead entries.",
     required: false,
   },
 ];
@@ -52,7 +52,7 @@ const RADARR_TRIGGERS: WebhookTrigger[] = [
   ...SHARED_TRIGGERS,
   {
     label: "On Movie File Delete",
-    reason: "Lets Silo drop movies you removed, instead of leaving dead entries.",
+    reason: "Lets Penguin drop movies you removed, instead of leaving dead entries.",
     required: false,
   },
 ];
@@ -68,7 +68,7 @@ export function triggersFor(provider: AutoscanWebhookProvider | "auto"): Webhook
     ...SHARED_TRIGGERS,
     {
       label: "On Episode File Delete / On Movie File Delete",
-      reason: "Whichever your service offers — lets Silo drop files you removed.",
+      reason: "Whichever your service offers — lets Penguin drop files you removed.",
       required: false,
     },
   ];

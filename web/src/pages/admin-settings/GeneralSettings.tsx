@@ -104,7 +104,7 @@ export default function GeneralSettings() {
               </li>
               <li>
                 Recommended: keep the defaults, and only add your proxy&apos;s public address as a
-                /32 (e.g. 203.0.113.7/32) if it reaches Silo from outside those ranges.
+                /32 (e.g. 203.0.113.7/32) if it reaches Penguin from outside those ranges.
               </li>
               <li>
                 CDNs such as Cloudflare connect from many published IP ranges — you must list all of

@@ -398,7 +398,7 @@ export function WatchPage({
               {session.errorTitle ?? "Playback unavailable"}
             </p>
             <p className="text-sm text-white/60">
-              {session.error ?? "Silo could not start playback."}
+              {session.error ?? "Penguin could not start playback."}
             </p>
           </div>
           <button

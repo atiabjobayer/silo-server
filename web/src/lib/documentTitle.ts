@@ -19,7 +19,7 @@ export function setActiveDocumentTitleLabel(label: string | null | undefined) {
  * server name as soon as branding resolves.
  */
 export function setAppDocumentTitle(name: string) {
-  APP_DOCUMENT_TITLE = name || "Silo";
+  APP_DOCUMENT_TITLE = name || "Penguin";
   if (typeof document !== "undefined") {
     document.title = formatDocumentTitle(activeLabel);
   }

@@ -221,7 +221,7 @@ export function InlineConnectionPicker({
                 </SelectContent>
               </Select>
               <p className="text-muted-foreground text-xs">
-                Silo already has these credentials — no need to enter them again.
+                Penguin already has these credentials — no need to enter them again.
               </p>
             </div>
           )}

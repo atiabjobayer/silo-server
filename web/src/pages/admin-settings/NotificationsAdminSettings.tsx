@@ -326,7 +326,7 @@ function DiscordSetupGuide() {
             </li>
             <li>
               Bot page: reset and copy the <strong>Token</strong>. Leave all Privileged Gateway
-              Intents (Presence, Server Members, Message Content) <strong>off</strong> — Silo never
+              Intents (Presence, Server Members, Message Content) <strong>off</strong> — Penguin never
               connects to the gateway; it only sends DMs.
             </li>
             <li>
@@ -517,8 +517,8 @@ function RegisterRelayRow({
   const expirationValid = expiration != null && !Number.isNaN(expiration.getTime());
   const renewalStatus = expirationValid
     ? expiration.getTime() <= Date.now()
-      ? "Expired; Silo will renew before the next delivery when the relay grace period permits."
-      : `Expires ${expiration.toLocaleString()}; Silo renews automatically during the final week with per-server jitter.`
+      ? "Expired; Penguin will renew before the next delivery when the relay grace period permits."
+      : `Expires ${expiration.toLocaleString()}; Penguin renews automatically during the final week with per-server jitter.`
     : configured
       ? "Expiration is unknown; the credential will be refreshed on its next lifecycle operation."
       : "No relay credential is registered.";
@@ -578,7 +578,7 @@ function RegisterRelayRow({
     <div className="space-y-3 py-3">
       <SettingField
         label="Deployment ID"
-        hint="Opaque relay account for this Silo server; created during registration"
+        hint="Opaque relay account for this Penguin server; created during registration"
         type="text"
         value={deploymentID}
         onChange={() => {}}
@@ -657,20 +657,20 @@ function MobilePushPrivacyDisclosure() {
       <div className="text-sm font-medium">Privacy disclosure</div>
       <div className="text-muted-foreground space-y-2 text-xs leading-relaxed">
         <p>
-          If you enable push notifications, your Silo Server sends a content-free request to Silo's
-          push relay so Silo can deliver notifications through Apple Push Notification service or
+          If you enable push notifications, your Penguin Server sends a content-free request to Penguin's
+          push relay so Penguin can deliver notifications through Apple Push Notification service or
           Firebase Cloud Messaging.
         </p>
         <p>
           The relay does not receive notification titles, message bodies, media names, user names,
           profile names, or your server URL. It does process technical metadata needed to deliver
           and operate the service, including an opaque deployment identifier, push delivery timing,
-          request status, app topic, the IP address your self-hosted Silo Server uses to contact the
+          request status, app topic, the IP address your self-hosted Penguin Server uses to contact the
           relay, and a hashed device push token. Apple or Google may also process standard push
           delivery metadata for their platform.
         </p>
         <p>
-          Push notifications are generic; the app fetches private content directly from your Silo
+          Push notifications are generic; the app fetches private content directly from your Penguin
           Server after receiving the push.
         </p>
       </div>
@@ -864,8 +864,8 @@ export default function NotificationsAdminSettings() {
 
           <ChannelCard
             icon={RadioTower}
-            title="Silo Push Relay"
-            description="Content-free mobile wakeups through Silo's relay, delivered by APNs or FCM."
+            title="Penguin Push Relay"
+            description="Content-free mobile wakeups through Penguin's relay, delivered by APNs or FCM."
             enabled={mobilePushOn}
             onEnabledChange={(enabled) => {
               form.setValue("notifications.apple_push_delivery_enabled", String(enabled));
@@ -903,7 +903,7 @@ export default function NotificationsAdminSettings() {
               />
               <SettingField
                 label="Relay URL"
-                hint="Public relay endpoint used by this Silo server; stored when you register"
+                hint="Public relay endpoint used by this Penguin server; stored when you register"
                 type="text"
                 value={pushRelayURL}
                 onChange={(v) => setPushRelayURLDraft(v)}
@@ -1141,7 +1141,7 @@ export default function NotificationsAdminSettings() {
               />
               <SettingField
                 label="Mention Requesters on Discord"
-                hint="Request posts to Discord destinations @mention the requesting user when their account has linked Discord (in user notification settings). Unlinked accounts show their Silo username without a mention."
+                hint="Request posts to Discord destinations @mention the requesting user when their account has linked Discord (in user notification settings). Unlinked accounts show their Penguin username without a mention."
                 type="toggle"
                 value={form.getValue("notifications.server_channels.mention_requesters")}
                 onChange={(v) =>

@@ -78,7 +78,7 @@ function KeyPrefixField({
         placeholder="silo/dev"
       />
       <p className="text-muted-foreground text-xs">
-        Optional. Stores all Silo objects under this folder inside the bucket. Leave blank to use
+        Optional. Stores all Penguin objects under this folder inside the bucket. Leave blank to use
         the bucket root.
       </p>
     </div>
@@ -150,7 +150,7 @@ export default function StorageSettings() {
         <h2 className="text-xl font-semibold tracking-tight">Storage</h2>
         <p className="text-muted-foreground text-sm leading-relaxed">
           Configure separate S3-compatible storage for client-facing assets and private internal
-          Silo artifacts.
+          Penguin artifacts.
         </p>
       </div>
 
@@ -205,7 +205,7 @@ export default function StorageSettings() {
                 <div className="text-[13px] leading-relaxed">
                   <p className="font-medium text-amber-500">Storage location change</p>
                   <p className="text-muted-foreground mt-1">
-                    Artwork is cached in this bucket. After the server restarts, Silo verifies the
+                    Artwork is cached in this bucket. After the server restarts, Penguin verifies the
                     cache against the new storage and automatically re-caches anything missing.
                     Uploaded images (custom posters, collection artwork, branding) cannot be
                     re-downloaded — migrate your bucket contents if you want to keep them.
@@ -290,7 +290,7 @@ export default function StorageSettings() {
 
           <TabsContent value="private" className="space-y-1 pt-4">
             <p className="text-muted-foreground mb-4 text-sm">
-              Stores non-public Silo objects such as imports, exports, and internal artifacts.
+              Stores non-public Penguin objects such as imports, exports, and internal artifacts.
             </p>
             <SettingField
               label="Endpoint"

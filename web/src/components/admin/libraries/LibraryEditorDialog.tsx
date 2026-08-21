@@ -42,7 +42,7 @@ const SECTIONS: Array<{
     label: "Folders",
     icon: FolderOpen,
     title: "Folders",
-    description: "Silo scans these folders for media and watches them for changes.",
+    description: "Penguin scans these folders for media and watches them for changes.",
   },
   {
     id: "metadata",

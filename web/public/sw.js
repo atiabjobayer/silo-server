@@ -19,7 +19,7 @@ self.addEventListener("push", (event) => {
   } catch {
     data = {};
   }
-  const title = data.title || "Silo";
+  const title = data.title || "Penguin";
   const options = {
     body: data.body || "",
     icon: data.icon || "/web-app-icon-192.png",

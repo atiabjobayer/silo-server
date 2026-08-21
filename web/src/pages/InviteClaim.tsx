@@ -145,7 +145,7 @@ export default function InviteClaim() {
             <div className="mb-6 space-y-3">
               <Button asChild size="lg" className="h-12 w-full text-base font-semibold">
                 <a href={appLink}>
-                  <Smartphone className="mr-2 h-5 w-5" /> Open in the Silo app
+                  <Smartphone className="mr-2 h-5 w-5" /> Open in the Penguin app
                 </a>
               </Button>
               <p className="text-muted-foreground text-center text-xs">

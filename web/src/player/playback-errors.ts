@@ -38,7 +38,7 @@ export function describePlanTerminal(terminal: TerminalV3): PlaybackPolicyErrorD
       return {
         title: "This file hasn't finished scanning",
         message:
-          "Silo doesn't know enough about this file yet to plan playback. Try again once the scan finishes.",
+          "Penguin doesn't know enough about this file yet to plan playback. Try again once the scan finishes.",
       };
     case "client_hls_unsupported":
       return {
@@ -52,7 +52,7 @@ export function describePlanTerminal(terminal: TerminalV3): PlaybackPolicyErrorD
       return {
         title: "No playable version found",
         message:
-          "Silo couldn't find a way to play this file on this device. Try another version if one is available.",
+          "Penguin couldn't find a way to play this file on this device. Try another version if one is available.",
       };
     case "hdr_transcode_unsupported":
     case "dv_conversion_unsupported":
@@ -65,7 +65,7 @@ export function describePlanTerminal(terminal: TerminalV3): PlaybackPolicyErrorD
     case "audio_conversion_unsupported":
       return {
         title: "This file can't be converted",
-        message: "Silo can't convert this file into something this device can play.",
+        message: "Penguin can't convert this file into something this device can play.",
       };
     case "conversion_tool_unavailable":
     case "transcode_node_unavailable":
@@ -104,12 +104,12 @@ export function describePlanTerminal(terminal: TerminalV3): PlaybackPolicyErrorD
         // unsupported); the generic sentence only covers a missing message.
         message:
           terminal.message?.trim() ||
-          "Silo couldn't prepare the selected subtitles for this device. Try a different track.",
+          "Penguin couldn't prepare the selected subtitles for this device. Try a different track.",
       };
     default:
       return {
         title: "Playback unavailable",
-        message: terminal.message?.trim() || "Silo could not start playback.",
+        message: terminal.message?.trim() || "Penguin could not start playback.",
       };
   }
 }
@@ -160,7 +160,7 @@ export function describePlaybackTransportError(
   if (error.status >= 500) {
     return {
       title: "Playback unavailable",
-      message: "Silo could not start playback right now. Please try again.",
+      message: "Penguin could not start playback right now. Please try again.",
     };
   }
 

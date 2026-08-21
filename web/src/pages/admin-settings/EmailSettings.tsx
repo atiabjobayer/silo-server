@@ -118,7 +118,7 @@ export default function EmailSettings() {
           />
           <SettingField
             label="From Name"
-            hint='Display name on outgoing mail (default "Silo")'
+            hint='Display name on outgoing mail (default "Penguin")'
             value={form.getValue("email.from_name")}
             onChange={(v) => form.setValue("email.from_name", v)}
           />

@@ -134,7 +134,7 @@ function KeyPrefixField({ value, onChange }: { value: string; onChange: (value: 
       <Label className="text-xs">Key Prefix</Label>
       <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder="silo/dev" />
       <p className="text-muted-foreground/70 text-xs">
-        Optional. Stores all Silo objects under this folder inside the bucket. Leave blank to use
+        Optional. Stores all Penguin objects under this folder inside the bucket. Leave blank to use
         the bucket root.
       </p>
     </div>
@@ -370,8 +370,8 @@ export function ServerStorageStep() {
           <div className="border-foreground/[0.06] bg-background/40 rounded-lg border px-3 py-3">
             <p className="text-xs font-medium">API layer</p>
             <p className="text-muted-foreground mt-1 text-xs leading-relaxed">
-              Lets Jellyfin-compatible apps discover Silo, sign in, browse libraries, fetch
-              metadata, and start playback through Silo's compatibility API.
+              Lets Jellyfin-compatible apps discover Penguin, sign in, browse libraries, fetch
+              metadata, and start playback through Penguin's compatibility API.
             </p>
           </div>
           <div className="border-foreground/[0.06] bg-background/40 rounded-lg border px-3 py-3">
@@ -414,7 +414,7 @@ export function ServerStorageStep() {
               id="setup-jellyfin-name"
               value={form.getValue("jellyfin_compat.server_name")}
               onChange={(e) => form.setValue("jellyfin_compat.server_name", e.target.value)}
-              placeholder="Silo"
+              placeholder="Penguin"
             />
           </div>
         </div>
@@ -442,7 +442,7 @@ export function ServerStorageStep() {
                 id="setup-jellyfin-web-install-dir"
                 value={form.getValue("jellyfin_compat.web_install_dir")}
                 onChange={(e) => form.setValue("jellyfin_compat.web_install_dir", e.target.value)}
-                placeholder="Use Silo managed directory"
+                placeholder="Use Penguin managed directory"
               />
               <p className="text-muted-foreground/70 text-xs">
                 Optional. Defaults to{" "}
@@ -627,7 +627,7 @@ export function ServerStorageStep() {
         onToggle={() => setPrivateExpanded((value) => !value)}
       >
         <p className="text-muted-foreground/80 text-xs leading-relaxed">
-          Stores non-public Silo objects such as imports, exports, and internal artifacts.
+          Stores non-public Penguin objects such as imports, exports, and internal artifacts.
         </p>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">

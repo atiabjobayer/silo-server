@@ -101,7 +101,7 @@ function capabilityLabel(type: string): string {
 function sourceLabel(sourceKind: string): string {
   switch (sourceKind) {
     case "silo":
-      return "Silo maintained";
+      return "Penguin maintained";
     case "approved_community":
       return "Approved community";
     default:
@@ -463,7 +463,7 @@ function InstalledPluginCard({
               Uninstall {pluginDisplayName(installation.plugin_id, presentation)}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Silo will stop the plugin, then remove its installation, configuration, and installed
+              Penguin will stop the plugin, then remove its installation, configuration, and installed
               files. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -820,7 +820,7 @@ function CommunityCatalogControl({ settings }: { settings: PluginCatalogSettings
             </label>
           </div>
           <p className="text-muted-foreground text-xs leading-relaxed">
-            Reviewed by Silo maintainers to work as described and be safe for their documented use.
+            Reviewed by Penguin maintainers to work as described and be safe for their documented use.
             These plugins remain maintained and supported by community contributors.
           </p>
           {settings.migrated_plugin_count > 0 ? (
@@ -946,7 +946,7 @@ function RepositorySection() {
               </div>
               <div className="flex shrink-0 gap-2">
                 {repo.managed ? (
-                  <span className="text-muted-foreground self-center text-xs">Managed by Silo</span>
+                  <span className="text-muted-foreground self-center text-xs">Managed by Penguin</span>
                 ) : (
                   <>
                     <Button
@@ -1141,7 +1141,7 @@ export default function AdminPlugins() {
         <div className="space-y-3">
           <h1 className="page-title text-[clamp(2rem,4vw,3rem)]">Plugins</h1>
           <p className="page-subtitle text-sm sm:text-base">
-            Extend Silo with community and first-party plugins.
+            Extend Penguin with community and first-party plugins.
           </p>
         </div>
         <div className="text-muted-foreground py-12 text-center text-sm">Loading plugins...</div>
@@ -1155,7 +1155,7 @@ export default function AdminPlugins() {
         <div className="space-y-3">
           <h1 className="page-title text-[clamp(2rem,4vw,3rem)]">Plugins</h1>
           <p className="page-subtitle text-sm sm:text-base">
-            Extend Silo with community and first-party plugins.
+            Extend Penguin with community and first-party plugins.
           </p>
         </div>
         <Button
