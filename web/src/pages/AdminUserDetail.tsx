@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import {
   PolicyAccessFields,
   PolicyLimitFields,
+  effectiveAccessGroupID,
   policyInheritHints,
   policyStateFromUser,
   policyUpdateFields,
@@ -1075,7 +1076,7 @@ function EditUserForm({ user, onClose }: { user: AdminUser; onClose: () => void 
   // server sent — but only while the saved group is still the selected one.
   // An admin inherits from no group, so preview the no-group policy while the
   // picked group is kept for toggling the role back.
-  const hintGroupID = role === "admin" ? null : accessGroupID;
+  const hintGroupID = effectiveAccessGroupID(role, accessGroupID);
   const inheritHints =
     policyInheritHints(hintGroupID, accessGroups) ??
     (hintGroupID === user.access_group_id ? user.effective_policy : undefined);
@@ -1092,7 +1093,7 @@ function EditUserForm({ user, onClose }: { user: AdminUser; onClose: () => void 
       enabled,
       // Admins are never grouped; derive it here so flipping the role back
       // before saving keeps the picked group.
-      access_group_id: role === "admin" ? null : accessGroupID,
+      access_group_id: effectiveAccessGroupID(role, accessGroupID),
       max_profiles: maxProfiles,
       ...policyUpdateFields(policy),
     };
