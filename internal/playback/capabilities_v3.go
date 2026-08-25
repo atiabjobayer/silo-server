@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Silo-Server/silo-server/internal/models"
+	"github.com/Silo-Server/silo-server/internal/tonemap"
 )
 
 // SourceDurationSecondsV3 reports a media file's runtime, or nil when it is
@@ -87,7 +88,7 @@ func SourceDescriptorFromFileV3(file *models.MediaFile, audioIndex int) SourceDe
 	}
 	if source.DynamicRange == "" {
 		if file.HDR {
-			source.DynamicRange = "hdr_unknown"
+			source.DynamicRange = DynamicRangeHDRUnknownV3
 		} else {
 			source.DynamicRange = DynamicRangeSDRV3
 		}
@@ -188,7 +189,7 @@ func outputRangeEligibleV3(source SourceDescriptorV3, request StartRequestV3) (b
 	case "hdr10":
 		claims.HDR10 = hdr != nil && hdr.HDR10
 		return claims.HDR10, claims
-	case "hdr_unknown":
+	case DynamicRangeHDRUnknownV3:
 		// Legacy rows only recorded a file-level HDR flag without per-track
 		// range metadata. HDR10 is by far the most common static-HDR range, so
 		// an HDR10-capable output treats the source as HDR10 instead of
@@ -217,6 +218,29 @@ func outputRangeEligibleV3(source SourceDescriptorV3, request StartRequestV3) (b
 	default:
 		return false, claims
 	}
+}
+
+// clientManagesOriginalDynamicRangeV3 is intentionally delivery-scoped. It
+// says the original-file executor can inspect the source and choose its own
+// display presentation after delivery; it does not make the same HDR source
+// safe for a server-produced progressive or HLS stream.
+func clientManagesOriginalDynamicRangeV3(source SourceDescriptorV3, request StartRequestV3) bool {
+	if source.DynamicRange == "" || source.DynamicRange == DynamicRangeSDRV3 {
+		return false
+	}
+	delivery, ok := request.ClientPlaybackContext.Deliveries[DeliveryClassOriginalHTTPV3]
+	return ok && delivery.Enabled && delivery.SupportedOnDevice &&
+		containsFoldV3(delivery.ValidatedClaims, ClaimClientManagedDynamicRangeV3)
+}
+
+// clientSelectsOriginalAudioTrackV3 is delivery-scoped because original HTTP
+// carries every source stream unchanged. A client that makes this claim maps
+// selected_tracks.audio.index onto its probed source inventory; clients that
+// do not keep the historical server-remux requirement for non-default audio.
+func clientSelectsOriginalAudioTrackV3(request StartRequestV3) bool {
+	delivery, ok := request.ClientPlaybackContext.Deliveries[DeliveryClassOriginalHTTPV3]
+	return ok && delivery.Enabled && delivery.SupportedOnDevice &&
+		containsFoldV3(delivery.ValidatedClaims, ClaimClientSelectedAudioTrackV3)
 }
 
 func clientSupportsHDR10V3(request StartRequestV3) bool {
@@ -263,24 +287,9 @@ func audioEligibilityV3(source SourceDescriptorV3, request StartRequestV3) (copy
 	return false, false, claim
 }
 
+// normalizeDynamicRangeV3 returns the protocol dynamic-range label for a track.
 func normalizeDynamicRangeV3(track models.VideoTrack) string {
-	if track.DVProfile > 0 || strings.Contains(strings.ToLower(track.VideoRangeType), "dovi") || strings.Contains(strings.ToLower(track.DolbyVision), "dolby") {
-		return DynamicRangeDolbyVisionV3
-	}
-	if track.HDR10Plus || strings.Contains(strings.ToLower(track.VideoRangeType), "hdr10+") {
-		return DynamicRangeHDR10PlusV3
-	}
-	joined := strings.ToLower(strings.Join([]string{track.VideoRange, track.VideoRangeType, track.ColorTransfer}, " "))
-	if strings.Contains(joined, "hlg") || strings.Contains(joined, "arib-std-b67") {
-		return DynamicRangeHLGV3
-	}
-	if strings.Contains(joined, "hdr") || strings.Contains(joined, "smpte2084") || strings.Contains(joined, "pq") {
-		return DynamicRangeHDR10V3
-	}
-	if joined == "  " || strings.TrimSpace(joined) == "" {
-		return ""
-	}
-	return DynamicRangeSDRV3
+	return tonemap.DynamicRangeForVideoTrack(track)
 }
 
 func parseFrameRateV3(value string) float64 {

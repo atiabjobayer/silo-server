@@ -17,6 +17,7 @@ import (
 	"github.com/Silo-Server/silo-server/internal/nodepool"
 	"github.com/Silo-Server/silo-server/internal/playback"
 	"github.com/Silo-Server/silo-server/internal/scanner"
+	"github.com/Silo-Server/silo-server/internal/tonemap"
 )
 
 const (
@@ -67,8 +68,11 @@ type FolderRepository interface {
 	GetByID(ctx context.Context, id int) (*models.MediaFolder, error)
 }
 
+// ProbeEnsurer repairs probe metadata. Only the repair half is needed here:
+// chapter extraction reads Chapters, never the H.264 copy-safety verdict, so
+// this deliberately does not ask for the bitstream scan.
 type ProbeEnsurer interface {
-	Ensure(ctx context.Context, file *models.MediaFile) (*models.MediaFile, error)
+	EnsureProbeOnly(ctx context.Context, file *models.MediaFile) (*models.MediaFile, error)
 }
 
 type SettingsReader interface {
@@ -541,7 +545,7 @@ func (s *Service) ensureChapters(ctx context.Context, file *models.MediaFile, no
 		return file, nil
 	}
 
-	ensured, err := s.probeEnsurer.Ensure(ctx, file)
+	ensured, err := s.probeEnsurer.EnsureProbeOnly(ctx, file)
 	if err == nil && ensured != nil {
 		return ensured, nil
 	}
@@ -1132,19 +1136,9 @@ func isChapterEligible(chapter models.MediaChapter, now time.Time) bool {
 	return true
 }
 
+// needsTonemap reports whether thumbnail extraction must convert HDR to SDR.
 func needsTonemap(file *models.MediaFile) bool {
-	if file == nil {
-		return false
-	}
-	if file.HDR {
-		return true
-	}
-	for _, track := range file.VideoTracks {
-		if strings.TrimSpace(track.DolbyVision) != "" {
-			return true
-		}
-	}
-	return false
+	return tonemap.NeedsToneMap(file)
 }
 
 func applyChapterSuccess(chapter *models.MediaChapter, thumbnailPath string, thumbnailThumbhash string) {

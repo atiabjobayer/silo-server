@@ -1,6 +1,51 @@
 # Feature Changelog
 
+## 2026-08-24
+
+### Start audiobook playback once after browser capability detection
+The web audiobook player now waits for the browser's capability check to finish before requesting a playback session. It previously reacted to each intermediate capability result, creating and immediately replacing multiple sessions when one play request should have produced only one.
+
+### Play HDR video on SDR-only devices
+An HDR source used to be a dead end for a device that cannot display HDR: Silo had no recipe that could convert one, so the plan refused rather than washing the picture out. Silo can now tone-map HDR to SDR, on streaming and on prepared downloads alike, so those devices get a watchable picture with the colors mapped rather than clipped.
+
+It is off until an administrator turns it on. Playback settings gain two independent switches — hardware tone mapping and software tone mapping — both default off, because the result is a re-encode and the quality is a judgement call that belongs to whoever runs the server. Turning on only one pins every tone-map to that path; turning on both prefers hardware and falls back to software when no hardware executor has capacity, so a busy GPU no longer refuses a stream an idle CPU could serve.
+
+Dolby Vision Profile 7 sources benefit too. Where the source declares a standards-compatible base layer, Silo now plays that base layer instead of refusing the file. Sources whose metadata cannot prove a usable base layer — Profile 5, and anything with incomplete signaling — are still refused rather than guessed at, and are re-examined automatically the next time the file is scanned.
+
+Admin activity shows which path a session actually used, so a stream that fell back from hardware to software reads as software rather than as whatever was planned. Direct play and direct stream of HDR are unchanged, and a device that manages HDR itself is never pushed onto a tone-map route. When tone mapping and 4K transcoding are enabled, the quality menu still offers lower resolutions during source-preserving HDR playback; choosing one validates the executor then starts the tone-mapped transcode. Quality choices now include explicit High, Medium, and Low bitrate steps at 4K, 1080p, and 720p, while omitting same-resolution steps that would not actually reduce the source bitrate.
+
+### Fix Jellyfin-compatible playback negotiation for optional codec-profile conditions
+Jellyfin clients send codec profiles whose conditions are frequently optional, and Silo previously
+failed every condition it did not model — including the `IsAnamorphic` check that jellyfin-web's
+webOS profile sends — so compatible H.264 and HEVC files were pushed into a needless transcode.
+Condition evaluation now matches Jellyfin's semantics and answers from real scanner data.
+- Honors `IsRequired` on profile conditions: an optional condition Silo cannot evaluate no longer
+  blocks direct play, while a required one still does. An omitted `IsRequired` key now decodes as
+  required, matching Jellyfin's own deserialization default.
+- Evaluates interlacing, frame rate, video and audio bitrate, audio sample rate, and audio profile
+  from the scanned track data instead of leaving those conditions unanswered.
+- Derives `IsAnamorphic` by comparing the track's display aspect ratio against its storage aspect
+  ratio, and reports the same derived value on the media stream returned to clients.
+- Restores direct play for compatible webOS H.264 and HEVC media that previously transcoded.
+
 ## 2026-08-23
+
+### Never wait on H.264 stream-copy analysis to start playing
+The check that decides whether an H.264 file can be stream-copied reads the opening seconds of the source, which on remote or cloud storage takes seconds. It used to run before playback could start, and a file it had never seen was held at the Play button; when the check itself failed, playback fell back to a full transcode even though nothing had actually proven the file unsafe.
+
+It no longer runs on the request path at all. A file with no stored verdict is now played optimistically — the cheap stream-copy route — and the analysis runs behind the stream that is already playing. Watch pages behave the same way: they start the analysis and render immediately.
+
+If the analysis then finds the file genuinely cannot be copied, Silo moves the sessions playing it off that route. Clients that advertise the new `plan_invalidated_v1` capability are told to switch, and they re-plan onto a transcode without the viewer seeing more than a brief rebuffer. Any other client — including every app version shipped before this change — has its session ended and recovers the way it already does; because the verdict is now stored, its next attempt starts on the transcode directly. An analysis that fails or is inconclusive changes nothing: nothing is stored and playback continues untouched, instead of the old behavior of transcoding on a failed check.
+
+### Browsing no longer waits on H.264 stream-copy analysis
+Silo checks each H.264 file once for a bitstream quirk that makes stream-copying unsafe. That check reads the opening seconds of the file, and it used to run while a media page was loading and be forgotten on every restart — so browsing a library, especially after a reboot, re-read part of every H.264 file. On remote or cloud storage that was the difference between an instant page and a slow one.
+
+Three things change. Media pages no longer trigger the analysis at all; it now happens when a play is actually being prepared, so browsing is fast regardless of where the files live. The result is stored on the file instead of being kept only in memory, so it survives restarts and is reused while the file's size and modification time still match. And the check itself reads 5 seconds instead of 15.
+
+A file that changes on disk is re-checked automatically: the stored answer is only trusted while the file's size and modification time still match, so re-encoding or replacing a file in place invalidates it without any manual step. Nothing is recorded when an analysis fails, so a transient error never turns into a stale verdict — the next request simply retries. No configuration changes, and playback behavior is unchanged.
+
+### Let capable original-file players manage HDR presentation
+Playback protocol v3 now recognizes the delivery-scoped `client_managed_dynamic_range_v1` claim on `original_http`. A client with a runtime-probing original-file engine can receive a declared HDR or Dolby Vision source even when the connected display does not natively advertise that source range, then choose its local presentation path after loading the file. The companion `client_selected_audio_track_v1` claim lets original delivery keep the complete source when a non-default audio track is selected; the plan's selected-track ordinal tells the claiming client which probed stream to activate instead of forcing a server remux, while unclaimed clients retain the old gate. Progressive and HLS outputs remain display-gated, explicit server-selected Dolby Vision transformations remain preferred, and a typed failure excludes the attempted original plan instead of looping; until server tone mapping exists, an exhausted HDR route still reports that limitation honestly.
 
 ### Serve tokenless playback from proxy nodes again
 Playback protocol v3 now advertises the engine-neutral `authorized_media_origins_v1` opt-in, which a client sends together with `header_authenticated_media_v1`. Plans for such an attempt may return absolute, still credential-free media URLs on server-designated proxy origins (`/stream/v3/...`), so direct play, progressive remux, and HLS egress from the node pool instead of the API server. The proxy validates the caller's own access token against the same live login session the API checks, so revoking a session stops proxy playback immediately; replans and every other control-plane call stay on the API. A client that sends only `header_authenticated_media_v1` keeps today's API-local behavior unchanged, and so does a deployment with no proxy pool.

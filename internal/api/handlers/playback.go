@@ -34,6 +34,8 @@ import (
 	"github.com/Silo-Server/silo-server/internal/streamtelemetry"
 	"github.com/Silo-Server/silo-server/internal/streamtoken"
 	"github.com/Silo-Server/silo-server/internal/subtitles"
+	"github.com/Silo-Server/silo-server/internal/tonemap"
+	"github.com/Silo-Server/silo-server/internal/transcodenode"
 	"github.com/Silo-Server/silo-server/internal/userstore"
 	"github.com/Silo-Server/silo-server/internal/watchstate"
 	"github.com/Silo-Server/silo-server/internal/watchsync"
@@ -55,6 +57,11 @@ type SessionManagerInterface interface {
 	TouchActivity(sessionID string) error
 	BeginTransport(sessionID string) error
 	EndTransport(sessionID string) error
+	// WatchTransportStop is required rather than probed for at run time: it is
+	// the only thing that can interrupt a single-response transport, so an
+	// implementation without it would serve progressive remuxes that no session
+	// stop can withdraw.
+	WatchTransportStop(sessionID string) (<-chan struct{}, func())
 	SetRemoteTransport(sessionID string, remote bool) error
 	SetEffectiveMediaFileID(sessionID string, fileID int) error
 	SetTranscodeNodeURL(sessionID, url string) error
@@ -123,8 +130,35 @@ type PlaybackFileVersionFetcher interface {
 	GetByEpisodeID(ctx context.Context, episodeID string) ([]*models.MediaFile, error)
 }
 
+// PlaybackProbeEnsurer repairs probe metadata and stamps the H.264 copy-safety
+// verdict when it is already known.
+//
+// It deliberately exposes no blocking variant: a play must never wait on the
+// multi-second bitstream scan, so an unknown verdict is planned optimistically
+// and resolved behind the play (see PlaybackCopySafetyRacer).
+//
+// EnsureProbeOnly is declared because this interface is also the type the
+// router carries the shared ensurer in when handing it to the catalog and
+// chapter-thumbnail services, which repair probe metadata and nothing else.
 type PlaybackProbeEnsurer interface {
-	Ensure(ctx context.Context, file *models.MediaFile) (*models.MediaFile, error)
+	EnsureProbeOnly(ctx context.Context, file *models.MediaFile) (*models.MediaFile, error)
+	EnsureCopySafetyCached(ctx context.Context, file *models.MediaFile) (*models.MediaFile, error)
+}
+
+// PlaybackCopySafetyRacer resolves an unknown H.264 copy-safety verdict out of
+// band, after a plan that stream-copies video has already been issued.
+// *playback.CopySafetyRace implements it.
+type PlaybackCopySafetyRacer interface {
+	RaceScanForPlan(fileID int, plan *playback.PlanV3)
+	// RaceScan re-engages the race for a file whose verdict is still open. The
+	// serve paths use it when they revive a stream-copy transport: the replica
+	// that planned it may be gone, and only a race running *here* can withdraw
+	// the route from the session this replica just rebuilt.
+	RaceScan(fileID int)
+	// VideoCopyUnsafeKnown answers, without ffmpeg and without waiting, whether
+	// this replica can already condemn a video stream-copy of the file —
+	// including from a verdict whose write to the row failed.
+	VideoCopyUnsafeKnown(ctx context.Context, file *models.MediaFile) bool
 }
 
 type PlaybackChapterThumbnailQueuer interface {
@@ -172,14 +206,18 @@ type PlaybackHandler struct {
 	// relayed request has nothing to reconstruct from. Optional and best effort:
 	// without it (or without Redis behind it) such a session replans instead of
 	// recovering, exactly as before.
-	NodeRecipeStore        recipeCardStoreV3
-	ItemAccess             PlaybackItemAccessChecker // optional; enables file authorization checks
-	EpisodeLookup          PlaybackEpisodeLookup     // optional; resolves episode files to their series
-	ExtraLookup            PlaybackExtraLookup       // optional; resolves extras files to their parent item
-	OriginalLangLookup     PlaybackOriginalLanguageLookup
-	SettingsRepo           PlaybackSettingsReader     // optional; reads server settings (e.g., allow_4k_transcode)
-	FileVersionFetcher     PlaybackFileVersionFetcher // optional; queries sibling file versions for 4K guard
-	ProbeEnsurer           PlaybackProbeEnsurer       // optional; repairs missing probe metadata on demand
+	NodeRecipeStore    recipeCardStoreV3
+	ItemAccess         PlaybackItemAccessChecker // optional; enables file authorization checks
+	EpisodeLookup      PlaybackEpisodeLookup     // optional; resolves episode files to their series
+	ExtraLookup        PlaybackExtraLookup       // optional; resolves extras files to their parent item
+	OriginalLangLookup PlaybackOriginalLanguageLookup
+	SettingsRepo       PlaybackSettingsReader     // optional; reads server settings (e.g., allow_4k_transcode)
+	FileVersionFetcher PlaybackFileVersionFetcher // optional; queries sibling file versions for 4K guard
+	ProbeEnsurer       PlaybackProbeEnsurer       // optional; repairs missing probe metadata on demand
+	// CopySafetyRacer resolves an unknown H.264 copy-safety verdict behind an
+	// already-issued stream-copy plan. Optional: without it an unknown verdict
+	// simply stays unknown and the copy route is never withdrawn.
+	CopySafetyRacer        PlaybackCopySafetyRacer
 	ChapterThumbnailQueuer PlaybackChapterThumbnailQueuer
 	IntroAnalyzer          IntroEpisodeAnalyzer
 	IntroRepository        PlaybackIntroEligibilityChecker
@@ -209,8 +247,10 @@ type PlaybackHandler struct {
 	// PlanStoreV3 owns the short-lived protocol-v3 control-plane state. Router
 	// wiring replaces the in-memory default with PostgreSQL in integrated mode.
 	PlanStoreV3          playback.PlanStoreV3
-	v3RegistryOnce       sync.Once
+	v3RegistryMu         sync.Mutex
 	v3Registry           *playback.TransformationRegistryV3
+	v3RegistryProbe      func(context.Context, string, tonemap.Capabilities) (*playback.TransformationRegistryV3, error)
+	v3ToneMapProbe       func(context.Context, string, string, string) (tonemap.Capabilities, error)
 	v3NodeCapabilitiesMu sync.Mutex
 	v3NodeCapabilities   map[string]v3NodeCapabilityCache
 	v3EventOnce          sync.Once
@@ -383,11 +423,16 @@ func semanticPlayMethod(s *playback.Session) playback.PlayMethod {
 	return s.PlayMethod
 }
 
+// ensurePlaybackProbe repairs probe metadata and stamps the H.264 copy-safety
+// verdict when it is already known. It never runs the bitstream scan: an
+// unknown verdict plans optimistically (the planner reads nil MultiplePPS as
+// "copy is allowed") and is resolved asynchronously once the plan is issued, so
+// starting playback never waits on a multi-second read of the source.
 func (h *PlaybackHandler) ensurePlaybackProbe(ctx context.Context, file *models.MediaFile) *models.MediaFile {
 	if h == nil || h.ProbeEnsurer == nil || file == nil {
 		return file
 	}
-	repaired, err := h.ProbeEnsurer.Ensure(ctx, file)
+	repaired, err := h.ProbeEnsurer.EnsureCopySafetyCached(ctx, file)
 	if err != nil {
 		slog.WarnContext(ctx, "playback probe repair failed", "component", "api", "file_id", file.ID, "path", file.FilePath, "error", err)
 		return file
@@ -446,37 +491,70 @@ func (h *PlaybackHandler) signStreamClaims(claims streamtoken.Claims) string {
 // hot path. A V3 session that negotiated header-authenticated media requires a
 // live authenticated owner on every request; a legacy session retains its UUID
 // bearer behavior. The overwhelmingly common case is a live in-memory session,
-// so the cheap GetSession lookup runs first and the
-// (HMAC + JSON) token decode is performed only on a not-found miss where a
-// reconstruct is actually required. On that miss it delegates to the shared
-// LoadOrReconstructSession front door so reconstruct/ownership semantics stay
-// identical. The returned card (nil on the live-session path) is the decoded
-// recipe the caller's own reconstruct branch consumes.
-func (h *PlaybackHandler) loadTranscodeServeSession(r *http.Request, sessionID string) (*playback.Session, playback.SessionLoadStatus, *playback.RecipeCard, *streamtoken.Claims) {
+// which needs no token at all, so the cheap GetSession lookup runs first and the
+// (HMAC + JSON) token decode is performed only when the session cannot serve by
+// itself: on a not-found miss where a reconstruct is required, and on a live
+// session with no runtime, where any valid recipe card (plain or tone-mapped)
+// joins the manager's atomic playback+runtime reconstruction operation. On the
+// miss it delegates to the shared LoadOrReconstructSession front door so
+// reconstruct/ownership semantics stay identical. The returned card (nil on the
+// live-session path when no token is presented) is the decoded recipe the
+// caller's own reconstruct branch consumes.
+func (h *PlaybackHandler) loadTranscodeServeSession(r *http.Request, sessionID string, requestedSegment int) (*playback.Session, playback.SessionLoadStatus, *playback.RecipeCard, *streamtoken.Claims, error) {
 	requestUserID := apimw.GetUserID(r.Context())
 	session, err := h.sessionMgr.GetSession(sessionID)
 	if err == nil {
 		// Defense in depth: LoadOrReconstructSession enforces the same rule for
 		// every serve handler, but this fast path never reaches it.
 		if session.RequireMediaAuthorization && requestUserID == 0 {
-			return nil, playback.SessionUnauthorized, nil, nil
+			return nil, playback.SessionUnauthorized, nil, nil, nil
 		}
 		// Live session: secure transports require a user above; legacy bearer
 		// routes allow zero. Either way, a present but mismatched identity is
 		// forbidden. No token verification on this hot path.
 		if requestUserID != 0 && session.UserID != requestUserID {
-			return nil, playback.SessionForbidden, nil, nil
+			return nil, playback.SessionForbidden, nil, nil, nil
 		}
-		return session, playback.SessionLoaded, nil, nil
+		if session.TranscodeNodeURL == "" && h.tm.GetTranscodeSession(sessionID) == nil {
+			// A live session whose runtime died can recover from the client's
+			// recipe token. Tone-mapped cards may back a provisional capability
+			// reconstruction; plain cards just respawn the encode. Either way the
+			// atomic playback+runtime operation is the same front door.
+			card, claims := verifiedStreamCardFromToken(r.URL.Query().Get(streamTokenParam), sessionID, h.JWTSecret)
+			if card != nil {
+				if videoCopyReconstructRefused(r.Context(), h.fileResolver, h.CopySafetyRacer, card) {
+					return nil, playback.SessionMissing, nil, nil, nil
+				}
+				session, _, status, reconstructErr := h.tm.LoadOrReconstructTranscodeWithError(r.Context(), h.sessionMgr.GetSession, sessionID, requestUserID, requestedSegment, card)
+				return session, status, card, claims, reconstructErr
+			}
+		}
+		return session, playback.SessionLoaded, nil, nil, nil
 	}
 	if !errors.Is(err, playback.ErrSessionNotFound) {
-		return nil, playback.SessionLoadFailed, nil, nil
+		return nil, playback.SessionLoadFailed, nil, nil, nil
 	}
 	// Genuine miss (e.g. after a restart): now — and only now — pay for the token
 	// decode so the recipe is available for reconstruction.
 	card, claims := verifiedStreamCardFromToken(r.URL.Query().Get(streamTokenParam), sessionID, h.JWTSecret)
+	// The copy-safety verdict gates the revival before it happens, not after.
+	// Reconstruction registers the playback session against the user's stream
+	// caps, so a refusal that ran later would leave a session nobody serves
+	// holding an admission slot the client's fresh attempt needs — and a
+	// remote-node recipe never reaches the local transport reconstruct at all
+	// (the serve handlers proxy to the node instead), so a gate down there would
+	// miss it entirely. A revival the verdict does not condemn re-engages the
+	// race here, so the session about to be rebuilt is covered by a race this
+	// replica owns. See playback_copy_safety.go.
+	if videoCopyReconstructRefused(r.Context(), h.fileResolver, h.CopySafetyRacer, card) {
+		return nil, playback.SessionMissing, nil, nil, nil
+	}
+	if card != nil && card.ToneMapMode != "" {
+		session, _, status, reconstructErr := h.tm.LoadOrReconstructTranscodeWithError(r.Context(), h.sessionMgr.GetSession, sessionID, requestUserID, requestedSegment, card)
+		return session, status, card, claims, reconstructErr
+	}
 	session, status := h.tm.LoadOrReconstructSession(r.Context(), h.sessionMgr.GetSession, sessionID, requestUserID, card)
-	return session, status, card, claims
+	return session, status, card, claims, nil
 }
 
 // streamCardFromToken verifies a stream token and decodes its reconstruction
@@ -1377,9 +1455,17 @@ func alignedSeekSeconds(seekSeconds float64, segmentDuration int, targetVideoCod
 // player can seek immediately. Copy-video sessions expose FFmpeg's real
 // keyframe-aligned manifest and use the resolved stream origin the v3 plan
 // reports as the timeline's stream_origin_seconds.
+//
+// Errors: 404 (playback_session_not_found / not_found) when the session is
+// missing or cannot be reconstructed, 503 (unavailable) while the transcode is
+// temporarily unavailable, and — for tone-map execution failures — 422
+// (unsupported) with an X-Silo-Tone-Map-Execution-Error header of
+// source_revision_changed or source_preflight_rejected. The 422 responses are
+// additive to the existing 404 and 503 cases; the Jellyfin-compatible 415
+// mapping is a separate surface and unchanged.
 func (h *PlaybackHandler) HandleGetTranscodeManifest(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "session_id")
-	session, status, card, claims := h.loadTranscodeServeSession(r, sessionID)
+	session, status, card, claims, reconstructErr := h.loadTranscodeServeSession(r, sessionID, -1)
 	switch status {
 	case playback.SessionMissing:
 		writePlaybackSessionNotFound(w)
@@ -1392,6 +1478,20 @@ func (h *PlaybackHandler) HandleGetTranscodeManifest(w http.ResponseWriter, r *h
 		return
 	case playback.SessionUnauthorized:
 		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		return
+	case playback.SessionUnavailable:
+		if writePlaybackToneMapExecutionError(w, reconstructErr) {
+			return
+		}
+		if card == nil || card.ToneMapMode == "" {
+			// A plain (non-tone-mapped) transcode whose token recipe cannot be
+			// rebuilt is served the same 404 the second-chance reconstruct
+			// branch produces: the session is effectively gone, and the client
+			// re-plans rather than retrying a dead encode.
+			writeError(w, http.StatusNotFound, "not_found", "Transcode session not found")
+			return
+		}
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "Transcode session is temporarily unavailable")
 		return
 	}
 	attachPlaybackSession(r.Context(), session, claims)
@@ -1408,11 +1508,11 @@ func (h *PlaybackHandler) HandleGetTranscodeManifest(w http.ResponseWriter, r *h
 		// Local transcode whose process state was lost: reconstruct it from the
 		// token recipe. The manifest path has no segment context, so pass -1 (use
 		// the token's seek position).
-		if card == nil {
-			writeError(w, http.StatusNotFound, "not_found", "Transcode session not found")
+		var secondChanceErr error
+		transcodeSession, secondChanceErr = h.reconstructTransportForServe(r.Context(), sessionID, -1, card)
+		if secondChanceErr != nil && writePlaybackToneMapExecutionError(w, secondChanceErr) {
 			return
 		}
-		transcodeSession = h.tm.ReconstructTranscode(r.Context(), sessionID, -1, *card)
 		if transcodeSession == nil {
 			writeError(w, http.StatusNotFound, "not_found", "Transcode session not found")
 			return
@@ -1434,12 +1534,44 @@ func (h *PlaybackHandler) HandleGetTranscodeManifest(w http.ResponseWriter, r *h
 	_, _ = w.Write(manifest)
 }
 
+func writePlaybackToneMapExecutionError(w http.ResponseWriter, err error) bool {
+	if errors.Is(err, tonemap.ErrSourceRevisionChanged) {
+		w.Header().Set(transcodenode.ToneMapExecutionErrorHeader, transcodenode.ToneMapSourceRevisionChangedCode)
+		writeError(w, http.StatusUnprocessableEntity, "unsupported", "Tone-map source changed")
+		return true
+	}
+	if errors.Is(err, playback.ErrToneMapSourceValidationUnavailable) {
+		w.Header().Set(transcodenode.ToneMapExecutionErrorHeader, transcodenode.ToneMapSourceValidationUnavailableCode)
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "Transcode session is temporarily unavailable")
+		return true
+	}
+	if errors.Is(err, tonemap.ErrSourcePreflightRejected) {
+		w.Header().Set(transcodenode.ToneMapExecutionErrorHeader, transcodenode.ToneMapSourcePreflightRejectedCode)
+		writeError(w, http.StatusUnprocessableEntity, "unsupported", "Tone-map source is unsupported by the selected executor")
+		return true
+	}
+	return false
+}
+
 // HandleGetTranscodeSegment handles GET /playback/transcode/{session_id}/segment/{name}.
 // Authorization follows the same negotiated legacy-versus-header-authenticated
 // rule as the manifest endpoint above.
+//
+// Errors: 404 (playback_session_not_found / not_found) when the session is
+// missing or cannot be reconstructed, or the segment does not exist; 503
+// (unavailable) while the transcode is temporarily unavailable; and — for
+// tone-map execution failures — 422 (unsupported) with an
+// X-Silo-Tone-Map-Execution-Error header of source_revision_changed or
+// source_preflight_rejected. The 422 responses are additive to the existing
+// 404 and 503 cases; the Jellyfin-compatible 415 mapping is a separate surface
+// and unchanged.
 func (h *PlaybackHandler) HandleGetTranscodeSegment(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "session_id")
-	session, status, card, claims := h.loadTranscodeServeSession(r, sessionID)
+	requestedSegment := -1
+	if segNum, parseErr := playback.ParseSegmentNumber(chi.URLParam(r, "name")); parseErr == nil {
+		requestedSegment = segNum
+	}
+	session, status, card, claims, reconstructErr := h.loadTranscodeServeSession(r, sessionID, requestedSegment)
 	switch status {
 	case playback.SessionMissing:
 		writePlaybackSessionNotFound(w)
@@ -1452,6 +1584,20 @@ func (h *PlaybackHandler) HandleGetTranscodeSegment(w http.ResponseWriter, r *ht
 		return
 	case playback.SessionUnauthorized:
 		writeError(w, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		return
+	case playback.SessionUnavailable:
+		if writePlaybackToneMapExecutionError(w, reconstructErr) {
+			return
+		}
+		if card == nil || card.ToneMapMode == "" {
+			// A plain (non-tone-mapped) transcode whose token recipe cannot be
+			// rebuilt is served the same 404 the second-chance reconstruct
+			// branch produces: the session is effectively gone, and the client
+			// re-plans rather than retrying a dead encode.
+			writeError(w, http.StatusNotFound, "not_found", "Transcode session not found")
+			return
+		}
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "Transcode session is temporarily unavailable")
 		return
 	}
 	attachPlaybackSession(r.Context(), session, claims)
@@ -1468,15 +1614,11 @@ func (h *PlaybackHandler) HandleGetTranscodeSegment(w http.ResponseWriter, r *ht
 		// Resume near the segment the client is fetching so reconstruct does not
 		// restart from the original seek point and stall. A non-segment name
 		// (e.g. init.mp4) parses as negative and falls back to the token position.
-		requestedSegment := -1
-		if segNum, parseErr := playback.ParseSegmentNumber(chi.URLParam(r, "name")); parseErr == nil {
-			requestedSegment = segNum
-		}
-		if card == nil {
-			writeError(w, http.StatusNotFound, "not_found", "Transcode session not found")
+		var secondChanceErr error
+		transcodeSession, secondChanceErr = h.reconstructTransportForServe(r.Context(), sessionID, requestedSegment, card)
+		if secondChanceErr != nil && writePlaybackToneMapExecutionError(w, secondChanceErr) {
 			return
 		}
-		transcodeSession = h.tm.ReconstructTranscode(r.Context(), sessionID, requestedSegment, *card)
 		if transcodeSession == nil {
 			writeError(w, http.StatusNotFound, "not_found", "Transcode session not found")
 			return
@@ -1576,7 +1718,7 @@ func (h *PlaybackHandler) HandleGetTranscodeSegment(w http.ResponseWriter, r *ht
 						"playback_session_id", sessionID,
 					)
 					if restartErr := h.tm.RestartSessionLocked(
-						context.WithoutCancel(r.Context()),
+						r.Context(),
 						sessionID,
 						transcodeSession,
 						seekSeconds,
@@ -1594,6 +1736,8 @@ func (h *PlaybackHandler) HandleGetTranscodeSegment(w http.ResponseWriter, r *ht
 							nextSegmentName := fmt.Sprintf("seg_%05d.m4s", segNum+1)
 							_, _ = transcodeSession.WaitForSegment(nextSegmentName, 1200*time.Millisecond)
 						}
+					} else {
+						err = restartErr
 					}
 				}
 			}
@@ -1604,6 +1748,9 @@ func (h *PlaybackHandler) HandleGetTranscodeSegment(w http.ResponseWriter, r *ht
 		}
 	}
 	if err != nil {
+		if writePlaybackToneMapExecutionError(w, err) {
+			return
+		}
 		if errors.Is(err, playback.ErrSegmentNotFound) {
 			writeError(w, http.StatusNotFound, "not_found", "Segment not found")
 			return
