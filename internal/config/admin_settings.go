@@ -71,7 +71,7 @@ var adminSettingDefaults = map[string]string{
 	"markers.mode":          "local",
 	"markers.lazy_playback": "false",
 
-	"playback.ffmpeg_path":                     "/usr/lib/jellyfin-ffmpeg/ffmpeg",
+	"playback.ffmpeg_path":                     "",
 	playbackTranscodeDirSettingKey:             DefaultTranscodeDir,
 	"playback.hw_accel":                        "auto",
 	"playback.transcode_enabled":               "true",
@@ -169,6 +169,9 @@ var adminSettingDefaults = map[string]string{
 	"notifications.web_push_enabled":                           "true",
 	"notifications.apple_push_delivery_enabled":                "false",
 	"notifications.android_push_delivery_enabled":              "false",
+
+	"taskmanager.history_retention_days": "30",
+	"taskmanager.history_keep_per_task":  "1000",
 
 	"opslog.retention_days":           "7",
 	"opslog.cleanup_interval_minutes": "15",
@@ -370,6 +373,10 @@ func NormalizeAdminSetting(key, raw string) (string, error) {
 		return normalizeAdminInt(key, value, 1, 25000)
 	case "catalog.search.meilisearch.rebuild_task_queue_depth":
 		return normalizeAdminInt(key, value, 1, 16)
+	case "taskmanager.history_retention_days":
+		return normalizeAdminInt(key, value, 1, 3650)
+	case "taskmanager.history_keep_per_task":
+		return normalizeAdminInt(key, value, 1, math.MaxInt32)
 	case "opslog.retention_days", "opslog.cleanup_interval_minutes":
 		return normalizeAdminInt(key, value, 1, math.MaxInt32)
 	case "opslog.max_rows", "opslog.max_size_mb":
@@ -392,7 +399,7 @@ func NormalizeAdminSetting(key, raw string) (string, error) {
 	case "userdb.backend":
 		return normalizeAdminEnum(key, value, "postgres", "sqlite")
 	case "playback.hw_accel":
-		return normalizeAdminEnum(key, value, "auto", "qsv", "vaapi", "nvenc", "none")
+		return normalizeAdminEnum(key, value, "auto", "qsv", "vaapi", "nvenc", "videotoolbox", "none")
 	case "playback.chapter_thumbnail_execution":
 		return normalizeAdminEnum(key, value, "local", "prefer_transcode_nodes", "transcode_nodes_only")
 	case "playback.chapter_thumbnail_hdr_policy":

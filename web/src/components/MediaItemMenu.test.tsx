@@ -1,9 +1,10 @@
+import { act, useRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import type { ItemDetail } from "@/api/types";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import MediaItemMenu, { buildMediaItemMenuModel, MetadataActionDialogHost } from "./MediaItemMenu";
 import { mediaItemMenuTriggerClassName } from "./mediaItemMenuTrigger";
 
@@ -380,14 +381,16 @@ describe("MediaItemMenu metadata dialogs", () => {
 });
 
 describe("MediaItemMenu trigger visibility", () => {
-  it("uses open state and keyboard focus without keeping a mouse-closed card focused", () => {
+  it("leaves reveal rules to the media-card CSS instead of utility classes", () => {
     const className = mediaItemMenuTriggerClassName();
 
     expect(className).toContain("media-card-action-trigger");
     expect(className).not.toContain("pointer-fine:");
-    expect(className).not.toContain("opacity-100");
-    expect(className).not.toContain("md:opacity-0");
+    expect(className).not.toContain("opacity-");
+    expect(className).not.toContain("group-hover");
     expect(className).not.toContain("group-focus-within");
+    expect(className).not.toContain("backdrop-blur");
+    expect(className).toContain("focus-visible:ring-2");
     expect(className).toContain("size-6");
     expect(className).toContain("sm:size-8");
   });
@@ -400,6 +403,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -424,6 +428,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -448,6 +453,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -473,6 +479,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -493,6 +500,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -523,6 +531,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -561,6 +570,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -582,6 +592,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -606,6 +617,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="wide"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -620,6 +632,7 @@ describe("MediaItemMenu trigger visibility", () => {
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="wide"
           showWatchedShortcut
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -633,6 +646,7 @@ describe("MediaItemMenu trigger visibility", () => {
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
           narrowPosterActions
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -656,6 +670,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -670,6 +685,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="episode"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -684,11 +700,40 @@ describe("MediaItemMenu trigger visibility", () => {
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
           showWatchedShortcut
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
 
     expect(screen.getByRole("button", { name: "Mark Watched" })).toBeTruthy();
+  });
+
+  it("shows only the quick actions selected by the resolved profile mode", () => {
+    const userState = { played: false, is_favorite: false, in_watchlist: false };
+    const renderMenu = (quickActionMode: "favorites" | "watched" | "none") => (
+      <MemoryRouter>
+        <MediaItemMenu
+          contentId="movie-1"
+          mediaType="movie"
+          userState={userState}
+          variant="poster"
+          quickActionMode={quickActionMode}
+        />
+      </MemoryRouter>
+    );
+    const { rerender } = render(renderMenu("favorites"));
+
+    expect(screen.getByRole("button", { name: "Add to favorites" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Mark Watched" })).toBeNull();
+
+    rerender(renderMenu("watched"));
+    expect(screen.queryByRole("button", { name: "Add to favorites" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Mark Watched" })).toBeTruthy();
+
+    rerender(renderMenu("none"));
+    expect(screen.queryByRole("button", { name: "Add to favorites" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Mark Watched" })).toBeNull();
+    expect(screen.getByRole("button", { name: "More actions" })).toBeTruthy();
   });
 
   it("uses matching action icons and sizes the menu to its longest entry", async () => {
@@ -701,6 +746,7 @@ describe("MediaItemMenu trigger visibility", () => {
           userState={{ played: true, is_favorite: true, in_watchlist: false }}
           variant="poster"
           dismissAction={{ itemId: "movie-1", surface: "continue_watching" }}
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -739,6 +785,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -765,6 +812,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -788,6 +836,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -819,6 +868,7 @@ describe("MediaItemMenu trigger visibility", () => {
           variant="wide"
           showCollectionActions={false}
           showWatchedShortcut
+          quickActionMode="both"
         />
       </MemoryRouter>
     );
@@ -842,6 +892,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -873,6 +924,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -894,6 +946,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -915,6 +968,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: true, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -937,6 +991,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: true, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -961,6 +1016,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -980,6 +1036,7 @@ describe("MediaItemMenu trigger visibility", () => {
           mediaType="movie"
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="wide"
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -994,6 +1051,7 @@ describe("MediaItemMenu trigger visibility", () => {
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
           showCollectionActions={false}
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -1010,6 +1068,7 @@ describe("MediaItemMenu trigger visibility", () => {
           userState={{ played: false, is_favorite: false, in_watchlist: false }}
           variant="poster"
           showFavoriteShortcut={false}
+          quickActionMode="both"
         />
       </MemoryRouter>,
     );
@@ -1019,5 +1078,153 @@ describe("MediaItemMenu trigger visibility", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "More actions" }));
     expect(screen.getByRole("menuitem", { name: "Add to Favorites" })).toBeTruthy();
+  });
+});
+
+describe("MediaItemMenu long-press action sheet", () => {
+  function LongPressCard({ onCardClick }: { onCardClick?: () => void }) {
+    const cardRef = useRef<HTMLDivElement>(null);
+
+    return (
+      <MemoryRouter>
+        <div ref={cardRef} data-testid="card">
+          <a href="/item/movie-1" onClick={onCardClick}>
+            Card link
+          </a>
+          <MediaItemMenu
+            contentId="movie-1"
+            mediaType="movie"
+            userState={{ played: false, is_favorite: false, in_watchlist: false }}
+            variant="poster"
+            longPressRef={cardRef}
+            itemTitle="Apex"
+            quickActionMode="both"
+          />
+        </div>
+      </MemoryRouter>
+    );
+  }
+
+  function pressCard(clientX = 40, clientY = 60) {
+    fireEvent.pointerDown(screen.getByTestId("card"), {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX,
+      clientY,
+    });
+  }
+
+  function holdPastLongPress() {
+    act(() => {
+      vi.advanceTimersByTime(600);
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("opens the sheet with the full action set after a touch hold", () => {
+    render(<LongPressCard />);
+
+    pressCard();
+    holdPastLongPress();
+
+    const sheet = screen.getByRole("dialog");
+    expect(within(sheet).getByText("Apex")).toBeTruthy();
+    expect(within(sheet).getByRole("button", { name: "Mark Watched" })).toBeTruthy();
+    expect(within(sheet).getByRole("button", { name: "Add to Favorites" })).toBeTruthy();
+    expect(within(sheet).getByRole("button", { name: "Add to Watchlist" })).toBeTruthy();
+  });
+
+  it("ignores mouse presses so precise pointers keep the hover controls", () => {
+    render(<LongPressCard />);
+
+    fireEvent.pointerDown(screen.getByTestId("card"), {
+      pointerId: 2,
+      pointerType: "mouse",
+      clientX: 40,
+      clientY: 60,
+    });
+    holdPastLongPress();
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("cancels the hold once the pointer moves like a carousel swipe", () => {
+    render(<LongPressCard />);
+
+    pressCard();
+    fireEvent.pointerMove(window, { pointerId: 1, pointerType: "touch", clientX: 96, clientY: 60 });
+    holdPastLongPress();
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("cancels the hold when the finger lifts before the delay", () => {
+    render(<LongPressCard />);
+
+    pressCard();
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    fireEvent.pointerUp(window, { pointerId: 1, pointerType: "touch", clientX: 40, clientY: 60 });
+    holdPastLongPress();
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("swallows the click the platform sends after the hold", () => {
+    const onCardClick = vi.fn();
+    render(<LongPressCard onCardClick={onCardClick} />);
+
+    pressCard();
+    holdPastLongPress();
+    fireEvent.pointerUp(window, { pointerId: 1, pointerType: "touch", clientX: 40, clientY: 60 });
+
+    const link = screen.getByText("Card link");
+    expect(fireEvent.click(link)).toBe(false);
+    expect(onCardClick).not.toHaveBeenCalled();
+  });
+
+  it("runs the selected action and closes the sheet", () => {
+    render(<LongPressCard />);
+
+    pressCard();
+    holdPastLongPress();
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Mark Watched" }),
+    );
+
+    expect(mocks.toggleWatched).toHaveBeenCalledWith(true);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps long press while omitting desktop-only shortcut trees on coarse-pointer devices", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+
+    render(<LongPressCard />);
+
+    expect(screen.queryByRole("button", { name: "Mark Watched" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add to favorites" })).toBeNull();
+    expect(screen.getByRole("button", { name: "More actions" })).toBeTruthy();
+
+    pressCard();
+    holdPastLongPress();
+
+    expect(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Mark Watched" }),
+    ).toBeTruthy();
   });
 });
