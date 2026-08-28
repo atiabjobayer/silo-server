@@ -22,9 +22,12 @@ const controls = vi.hoisted(() => ({
   current: null as null | {
     activeSubtitleIndex: number | null;
     subtitleTracks: PlayerSubtitleInfo[];
+    visible: boolean;
     onSubtitleSelect?: (index: number | null, inventoryTrack?: unknown) => void;
+    onSurfaceTap?: (event: React.MouseEvent<HTMLElement>) => void;
   },
 }));
+const playerSeek = vi.hoisted(() => vi.fn());
 const subtitleTimeline = vi.hoisted(() => ({
   textOffsetSeconds: null as number | null,
   assOffsetSeconds: null as number | null,
@@ -45,7 +48,7 @@ vi.mock("../hooks/useWatchProgress", () => ({
 }));
 vi.mock("../hooks/useKeyboardShortcuts", () => ({ useKeyboardShortcuts: vi.fn() }));
 vi.mock("../hooks/useRemuxSeeking", () => ({
-  useRemuxSeeking: () => ({ handleSeek: vi.fn() }),
+  useRemuxSeeking: () => ({ handleSeek: playerSeek }),
 }));
 vi.mock("../hooks/useSubtitleTracks", () => ({
   useSubtitleTracks: (...args: unknown[]) => {
@@ -79,8 +82,8 @@ vi.mock("hls.js", () => ({
     static ErrorTypes = { NETWORK_ERROR: "networkError", MEDIA_ERROR: "mediaError" };
     static isSupported = () => hlsJS.supported;
 
-    constructor() {
-      hlsJS.constructed();
+    constructor(config?: unknown) {
+      hlsJS.constructed(config);
     }
 
     on() {}
@@ -90,8 +93,15 @@ vi.mock("hls.js", () => ({
   },
 }));
 vi.mock("./PlayerControls", () => ({
+  SKIP_BACK_SECONDS: 10,
+  SKIP_FORWARD_SECONDS: 30,
   PlayerControls: vi.fn(
-    (props: { activeSubtitleIndex: number | null; subtitleTracks: PlayerSubtitleInfo[] }) => {
+    (props: {
+      activeSubtitleIndex: number | null;
+      subtitleTracks: PlayerSubtitleInfo[];
+      visible: boolean;
+      onSurfaceTap?: (event: React.MouseEvent<HTMLElement>) => void;
+    }) => {
       controls.current = props;
       return null;
     },
@@ -180,6 +190,7 @@ describe("VideoPlayer plan failure recovery", () => {
     hlsJS.supported = false;
     hlsJS.constructed.mockClear();
     toastError.mockClear();
+    playerSeek.mockClear();
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
     vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
@@ -188,6 +199,54 @@ describe("VideoPlayer plan failure recovery", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+  });
+
+  it("toggles controls on a coarse-pointer single tap and seeks on a left double tap", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({
+        matches: true,
+        media: "(pointer: coarse)",
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    );
+    try {
+      const { container } = renderPlayer({ shouldAutoPlay: false });
+      const video = container.querySelector("video");
+      if (!video) throw new Error("expected video element");
+      Object.defineProperty(video, "readyState", { configurable: true, value: 3 });
+      Object.defineProperty(video, "currentTime", { configurable: true, value: 50 });
+      fireEvent.canPlay(video);
+      await vi.waitFor(() => expect(controls.current?.onSurfaceTap).toBeTypeOf("function"));
+
+      act(() =>
+        controls.current?.onSurfaceTap?.({
+          clientX: 200,
+          currentTarget: { getBoundingClientRect: () => ({ left: 0, width: 390 }) },
+        } as unknown as React.MouseEvent<HTMLElement>),
+      );
+      act(() => vi.advanceTimersByTime(250));
+      expect(controls.current?.visible).toBe(false);
+
+      const leftTap = {
+        clientX: 20,
+        currentTarget: { getBoundingClientRect: () => ({ left: 0, width: 390 }) },
+      } as unknown as React.MouseEvent<HTMLElement>;
+      act(() => {
+        controls.current?.onSurfaceTap?.(leftTap);
+        controls.current?.onSurfaceTap?.(leftTap);
+      });
+      expect(playerSeek).toHaveBeenCalledWith(40);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("loads a replacement transport without resuming paused playback", async () => {
@@ -541,6 +600,7 @@ describe("VideoPlayer native HLS timeline", () => {
 
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -576,6 +636,11 @@ describe("VideoPlayer native HLS timeline", () => {
 
   it("uses native HLS for Dolby Vision when hls.js is also available", async () => {
     hlsJS.supported = true;
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/26.0 Safari/605.1.15",
+    });
     const plan = fixturePlanV3({
       delivery: "server_remux_hls",
       stream: {
@@ -607,6 +672,33 @@ describe("VideoPlayer native HLS timeline", () => {
 
     expect(video.currentTime).toBe(7);
     expect(hlsJS.constructed).not.toHaveBeenCalled();
+  });
+
+  it("uses hls.js for Dolby Vision in Chromium even when native HLS is advertised", async () => {
+    hlsJS.supported = true;
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36",
+    });
+    const plan = fixturePlanV3({
+      delivery: "server_remux_hls",
+      stream: {
+        url: "/playback/transcode/session-1/master.m3u8",
+        protocol: "hls",
+        headers: {},
+        header_refresh: "none",
+      },
+      effective_recipe: {
+        video_codec: "hevc",
+        audio_codec: "aac",
+        dynamic_range: "dolby_vision",
+      },
+    });
+
+    renderPlayer({ plan });
+
+    await waitFor(() => expect(hlsJS.constructed).toHaveBeenCalledOnce());
   });
 });
 

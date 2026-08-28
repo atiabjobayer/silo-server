@@ -12,9 +12,7 @@ import {
   MoreVertical,
   Play,
   RefreshCw,
-  Pencil,
   Scissors,
-  Search,
   RotateCcw,
   Tags,
 } from "lucide-react";
@@ -44,11 +42,19 @@ import type {
 import RefreshMetadataDialog from "@/components/RefreshMetadataDialog";
 import { MarkerEditor } from "@/components/markers/MarkerEditor";
 import StarRating from "@/components/StarRating";
+import { MediaActionIcon } from "@/components/mediaActionIcons";
 import { useWatchPlaybackController } from "@/playback/watchPlaybackContext";
 import { parseWatchHref } from "@/pages/watchRouteHelpers";
 import VersionDropdown from "./VersionDropdown";
 import AudioTracksPopover from "./AudioTracksPopover";
 import SubtitlesPopover from "./SubtitlesPopover";
+
+// Keep hover feedback on the compositor. Repainting these controls while the detail backdrop is
+// animating can stall the main thread on image-heavy movie and series pages.
+const responsivePrimaryActionClass =
+  "transform-gpu transition-transform duration-150 motion-safe:hover:scale-[1.02] motion-safe:active:scale-[0.98]";
+const responsivePlayActionClass = `${responsivePrimaryActionClass} hover:bg-primary motion-reduce:hover:bg-primary/90`;
+const staticGlassActionClass = "transition-none";
 
 interface ActionBarProps {
   contentId?: string;
@@ -287,7 +293,7 @@ export default function ActionBar({
           showPlayChoiceDialog ? (
             <Button
               onClick={openPlayChoiceDialog}
-              className="relative h-11 gap-2.5 overflow-hidden rounded-full px-8 text-[15px] font-bold tracking-wide shadow-md"
+              className={`${responsivePlayActionClass} relative h-11 cursor-pointer gap-2.5 overflow-hidden rounded-full px-8 text-[15px] font-bold tracking-wide shadow-md`}
             >
               <Play className="size-[18px] fill-current" />
               {displayedPlayLabel}
@@ -296,7 +302,7 @@ export default function ActionBar({
           ) : selectedVersion ? (
             <Button
               onClick={() => handleSelectedVersionPlay(false)}
-              className="relative h-11 gap-2.5 overflow-hidden rounded-full px-8 text-[15px] font-bold tracking-wide shadow-md"
+              className={`${responsivePlayActionClass} relative h-11 cursor-pointer gap-2.5 overflow-hidden rounded-full px-8 text-[15px] font-bold tracking-wide shadow-md`}
             >
               <Play className="size-[18px] fill-current" />
               {displayedPlayLabel}
@@ -305,7 +311,7 @@ export default function ActionBar({
           ) : (
             <Button
               onClick={() => startPlaybackFromHref(playHref)}
-              className="relative h-11 gap-2.5 overflow-hidden rounded-full px-8 text-[15px] font-bold tracking-wide shadow-md"
+              className={`${responsivePlayActionClass} relative h-11 cursor-pointer gap-2.5 overflow-hidden rounded-full px-8 text-[15px] font-bold tracking-wide shadow-md`}
             >
               <Play className="size-[18px] fill-current" />
               {displayedPlayLabel}
@@ -332,7 +338,7 @@ export default function ActionBar({
             variant="glass"
             onClick={onToggleWatched}
             disabled={isUpdatingWatched}
-            className="h-11 rounded-full px-5 text-[14px] font-semibold"
+            className={`${responsivePrimaryActionClass} h-11 rounded-full px-5 text-[14px] font-semibold enabled:cursor-pointer`}
           >
             <Check className="size-[18px]" />
             {watchedLabel}
@@ -346,7 +352,7 @@ export default function ActionBar({
             size="icon-lg"
             onClick={onToggleFavorite}
             title={isFavorite ? "Unfavorite" : "Favorite"}
-            className="size-11 rounded-full"
+            className={`${staticGlassActionClass} size-11 cursor-pointer rounded-full`}
           >
             <Heart
               className={`size-[18px] transition-colors ${isFavorite ? "fill-current text-red-400" : ""}`}
@@ -360,11 +366,16 @@ export default function ActionBar({
 
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
-            <Button variant="glass" size="icon-lg" title="More" className="size-11 rounded-full">
+            <Button
+              variant="glass"
+              size="icon-lg"
+              title="More"
+              className={`${staticGlassActionClass} size-11 cursor-pointer rounded-full`}
+            >
               <MoreVertical className="size-[18px]" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuContent align="end" className="w-max max-w-[calc(100vw-2rem)] min-w-0">
             {restartHref && (
               <DropdownMenuItem
                 onSelect={() => {
@@ -414,6 +425,7 @@ export default function ActionBar({
                       navigate(`/admin/history?media_item_id=${encodeURIComponent(contentId)}`)
                     }
                   >
+                    <MediaActionIcon action="viewPlayHistory" />
                     View Play History
                   </DropdownMenuItem>
                 )}
@@ -424,7 +436,7 @@ export default function ActionBar({
                       setRefreshDialogOpen(true);
                     }}
                   >
-                    {isRefreshing && <RefreshCw className="size-4 animate-spin" />}
+                    <MediaActionIcon action="refreshMetadata" isPending={isRefreshing} />
                     Refresh Metadata
                   </DropdownMenuItem>
                 )}
@@ -436,7 +448,7 @@ export default function ActionBar({
                 )}
                 {canCurateMetadata && onEditMetadata && (
                   <DropdownMenuItem onSelect={onEditMetadata}>
-                    <Pencil className="size-4" />
+                    <MediaActionIcon action="editMetadata" />
                     Edit Metadata
                   </DropdownMenuItem>
                 )}
@@ -448,7 +460,7 @@ export default function ActionBar({
                 )}
                 {canCurateMetadata && onMatchItem && (
                   <DropdownMenuItem onSelect={onMatchItem}>
-                    <Search className="size-4" />
+                    <MediaActionIcon action="matchItem" />
                     Match Item
                   </DropdownMenuItem>
                 )}
@@ -512,8 +524,11 @@ export default function ActionBar({
       </div>
 
       {/* ── Stream info controls (second row) ──────────────── */}
+      {/* flex-wrap matters: without it this row's min-content width (two or
+          three nowrap trigger buttons) inflates the auto-sized hero column
+          past narrow viewports, clipping the whole info column. */}
       {hasStreamControls && (
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           {versions && hasMultipleVersions && selectedVersion && onSelectVersion && (
             <VersionDropdown
               versions={versions}

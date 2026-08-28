@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ParsedCue } from "../utils/parseVTT";
 import { resolveSubtitleAutoSelect } from "../utils/subtitleSort";
 import type HlsType from "hls.js";
-import { PlayerControls } from "./PlayerControls";
+import { PlayerControls, SKIP_BACK_SECONDS, SKIP_FORWARD_SECONDS } from "./PlayerControls";
 import { PlaybackInfoOverlay } from "./PlaybackInfoOverlay";
 import { PlaybackNoticeOverlay } from "./PlaybackNoticeOverlay";
 import { IntroSkipButton } from "./IntroSkipButton";
@@ -17,6 +17,7 @@ import { useSubtitleTracks } from "../hooks/useSubtitleTracks";
 import { useASSSubtitles } from "../hooks/useASSSubtitles";
 import { useSubtitleAppearance } from "../hooks/useSubtitleAppearance";
 import { useSubtitleLayout } from "../hooks/useSubtitleLayout";
+import { useCoarsePointer } from "../hooks/useCoarsePointer";
 import { computeSubtitleFontSize } from "@/lib/subtitleAppearance";
 import { useNextEpisode } from "../hooks/useNextEpisode";
 import { MARKER_KINDS, useMarkerEditor } from "../hooks/useMarkerEditor";
@@ -35,7 +36,8 @@ import type {
 import { resolvePendingSeekTime } from "../utils/pendingSeek";
 import { resolveVersionAudioLanguage } from "../utils/effectiveAudioLanguage";
 import { HlsStartupGuard } from "../utils/hlsStartupGuard";
-import { resolveHLSEngineV3 } from "../utils/hlsEngine";
+import { isSafariBrowserV3, resolveHLSEngineV3 } from "../utils/hlsEngine";
+import { isFirefoxUserAgent } from "../utils/browser";
 import { normalizeSubtitleMode } from "../utils/subtitleMode";
 import type {
   PlaybackExitState,
@@ -514,9 +516,7 @@ export function VideoPlayer({
   }, [isPlayerReady, planRevision]);
 
   const isFirefoxBrowser =
-    typeof navigator !== "undefined" &&
-    /firefox/i.test(navigator.userAgent) &&
-    !/seamonkey/i.test(navigator.userAgent);
+    typeof navigator !== "undefined" && isFirefoxUserAgent(navigator.userAgent);
   const watchTogether =
     watchTogetherConnection ??
     ({
@@ -1520,6 +1520,13 @@ export function VideoPlayer({
       if (isHlsStream) {
         try {
           const nativeSupported = video.canPlayType("application/vnd.apple.mpegurl") !== "";
+          // Safari's HLS capability evidence comes from its media element, so
+          // keep every Safari plan on that same engine. Chromium can also
+          // advertise native HLS, but treats an in-progress copy remux as live
+          // and jumps toward its rapidly advancing production edge; its
+          // conservative HLS claims and runtime both use hls.js instead.
+          const preferNativeHLS =
+            typeof navigator !== "undefined" && isSafariBrowserV3(navigator.userAgent);
           const resolution = await resolveHLSEngineV3(
             plannedDynamicRange,
             nativeSupported,
@@ -1527,6 +1534,7 @@ export function VideoPlayer({
             (error) => {
               console.error("[hls.js] Failed to initialize, falling back to native HLS:", error);
             },
+            preferNativeHLS,
           );
           if (destroyed || hlsStartupGuardRef.current?.hasFailed()) return;
 
@@ -1852,7 +1860,9 @@ export function VideoPlayer({
 
   // -- Control visibility (hover anywhere to show) --
   const [controlsVisible, setControlsVisible] = useState(true);
+  const isCoarsePointer = useCoarsePointer();
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const surfaceTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearControlsTimer = useCallback(() => {
     if (hideTimerRef.current) {
@@ -2277,6 +2287,60 @@ export function VideoPlayer({
     video.pause();
   }, [sessionId, showWatchTogetherNotice, watchTogether, watchTogetherRoomId, watchTogetherSync]);
 
+  const handleSurfaceTap = useCallback(
+    (event?: React.MouseEvent<HTMLElement>) => {
+      if (!isCoarsePointer) {
+        handlePlayPause();
+        return;
+      }
+      if (surfaceTapTimerRef.current) {
+        clearTimeout(surfaceTapTimerRef.current);
+        surfaceTapTimerRef.current = null;
+        const rect = event?.currentTarget.getBoundingClientRect();
+        const relativeX = rect && event ? (event.clientX - rect.left) / rect.width : 0.5;
+        const now = videoRef.current?.currentTime ?? currentTime;
+        if (relativeX < 1 / 3) {
+          handlePlayerSeek(Math.max(0, now - SKIP_BACK_SECONDS));
+          resetControlsTimer();
+        } else if (relativeX > 2 / 3) {
+          handlePlayerSeek(
+            Math.min(duration || now + SKIP_FORWARD_SECONDS, now + SKIP_FORWARD_SECONDS),
+          );
+          resetControlsTimer();
+        } else {
+          handlePlayPause();
+        }
+        return;
+      }
+      surfaceTapTimerRef.current = setTimeout(() => {
+        surfaceTapTimerRef.current = null;
+        if (controlsVisible) {
+          clearControlsTimer();
+          setControlsVisible(false);
+        } else {
+          resetControlsTimer();
+        }
+      }, 250);
+    },
+    [
+      clearControlsTimer,
+      controlsVisible,
+      currentTime,
+      duration,
+      handlePlayPause,
+      handlePlayerSeek,
+      isCoarsePointer,
+      resetControlsTimer,
+    ],
+  );
+
+  useEffect(
+    () => () => {
+      if (surfaceTapTimerRef.current) clearTimeout(surfaceTapTimerRef.current);
+    },
+    [],
+  );
+
   useEffect(() => {
     reportRoomReadyRef.current = watchTogetherSync.reportReady;
   }, [watchTogetherSync.reportReady]);
@@ -2676,7 +2740,7 @@ export function VideoPlayer({
       {/* Back button + media info */}
       {!isDetached && (
         <div
-          className={`absolute top-4 left-4 z-50 flex items-center gap-3 transition-opacity duration-300 ${
+          className={`absolute top-[max(1rem,env(safe-area-inset-top))] left-[max(1rem,env(safe-area-inset-left))] z-50 flex items-center gap-3 transition-opacity duration-300 ${
             controlsVisible ? "opacity-100" : "pointer-events-none opacity-0"
           }`}
         >
@@ -2840,7 +2904,7 @@ export function VideoPlayer({
       <video
         ref={videoRef}
         className={isDetached ? "h-full w-full" : "absolute inset-0 h-full w-full"}
-        onClick={displayMode === "postroll" ? undefined : handlePlayPause}
+        onClick={displayMode === "postroll" ? undefined : handleSurfaceTap}
         playsInline
         style={!isPlayerReady ? { visibility: "hidden" } : undefined}
       />
@@ -2972,6 +3036,7 @@ export function VideoPlayer({
           onVolumeChange={handleVolumeChange}
           onMutedChange={handleMutedChange}
           onFullscreenToggle={handleFullscreenToggle}
+          onSurfaceTap={isCoarsePointer ? handleSurfaceTap : undefined}
           showPlaybackInfo={showPlaybackInfo}
           onTogglePlaybackInfo={() => setShowPlaybackInfo((v) => !v)}
           hasPrevEpisode={!!prevEpisodeRef}
