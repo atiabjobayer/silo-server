@@ -148,13 +148,10 @@ vi.mock("@/hooks/useTheme", () => ({
     previewTheme: vi.fn(),
     resetPreviewTheme: vi.fn(),
   }),
+  isKeyboardFocus: () => false,
   // SiloBrand reads the appearance through the optional hook; null keeps it on
   // the dark built-in assets, matching the sidebar's own surface.
   useOptionalTheme: () => null,
-}));
-
-vi.mock("@/components/ThemeSwitcher", () => ({
-  default: () => <div>Theme switcher</div>,
 }));
 
 vi.mock("@/components/ui/avatar", () => ({
@@ -206,7 +203,7 @@ describe("AppSidebar", () => {
     const markup = renderSidebar("/");
 
     expect(markup).toContain('src="/silo-wordmark-sidebar.png"');
-    expect(markup).toContain('alt="Silo"');
+    expect(markup).toContain('alt="Penguin"');
     expect(markup).not.toContain("▶");
   });
 

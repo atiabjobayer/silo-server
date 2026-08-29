@@ -543,10 +543,6 @@ export default function SettingsLayout() {
     })).filter((section) => section.items.length > 0);
   }, [canManageProfiles, actingAdmin, user, profile]);
 
-  const flatItems = useMemo(
-    () => visibleSections.flatMap((section) => section.items),
-    [visibleSections],
-  );
   const filteredSections = useMemo(
     () => filterSettingsSearchGroups(visibleSections, settingsSearch),
     [settingsSearch, visibleSections],
@@ -561,7 +557,7 @@ export default function SettingsLayout() {
         {activeSegment ? (
           <>
             <div className="hidden lg:block">
-              <PageBack to="/" preferHistory={false} floating />
+              <PageBack to="/" up floating />
             </div>
             <Link
               to="/settings"
@@ -581,7 +577,6 @@ export default function SettingsLayout() {
                 value={settingsSearch}
                 onChange={setSettingsSearch}
                 resultCount={filteredSettingsCount}
-                totalCount={flatItems.length}
                 className="w-full sm:max-w-sm"
                 shortcutMediaQuery={activeSegment ? "(min-width: 64rem)" : undefined}
               />
@@ -634,7 +629,7 @@ export default function SettingsLayout() {
           </>
         ) : (
           <>
-            <PageBack to="/" preferHistory={false} floating />
+            <PageBack to="/" up floating />
             <div className="page-header mt-10 mb-6 gap-5 sm:mt-12 sm:mb-8">
               <div className="min-w-0 space-y-3">
                 <h1 className="page-title text-[clamp(2rem,4vw,3rem)]">Settings</h1>
@@ -646,7 +641,6 @@ export default function SettingsLayout() {
                 value={settingsSearch}
                 onChange={setSettingsSearch}
                 resultCount={filteredSettingsCount}
-                totalCount={flatItems.length}
                 className="w-full sm:max-w-sm lg:w-[26rem] lg:max-w-none"
                 showShortcutHint
               />
