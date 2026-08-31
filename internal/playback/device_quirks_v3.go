@@ -7,6 +7,7 @@ const (
 	QuirkFireTVAFTKRTEAC3HLSV3      = "android.fire_tv.aftkrt.eac3_7_1_hls_audio_adapt_v1"
 	QuirkFireTVDV8HDR10PlusV3       = "android.fire_tv.dv8_hdr10plus_sei_v1"
 	QuirkFirefoxMatroskaAACTimingV3 = "web.firefox.matroska_aac_timestamps_v1"
+	legacyAndroidMedia3HLSBuildV3   = "15"
 )
 
 func high10DecodeOverrideV3(source SourceDescriptorV3, request StartRequestV3) (*AppliedQuirkV3, bool) {
@@ -47,6 +48,16 @@ func hlsEAC3AudioCorrectionV3(source SourceDescriptorV3, request StartRequestV3)
 		Reason:           "AFTKRT cannot reliably consume eight-channel E-AC-3 from an HLS MPEG-TS route.",
 	}
 	return &quirk, true
+}
+
+// usesFirstPartyAndroidMedia3HLSV3 identifies the exact legacy Silo Android
+// build that predates native_hls_playback_v1 but already reports its build and
+// opts into the device-quirks contract. Current clients advertise the native
+// HLS feature on the delivery directly.
+func usesFirstPartyAndroidMedia3HLSV3(request StartRequestV3) bool {
+	return deviceQuirkProtocolAvailableV3(request) &&
+		strings.EqualFold(strings.TrimSpace(request.ClientPlaybackContext.Device.Platform), "android") &&
+		strings.TrimSpace(request.ClientPlaybackContext.AppBuild) == legacyAndroidMedia3HLSBuildV3
 }
 
 func dv8HDR10PlusRuntimeCorrectionV3(source SourceDescriptorV3, request StartRequestV3, deliveryClass string) (*AppliedQuirkV3, bool) {

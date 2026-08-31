@@ -389,6 +389,24 @@ func TestPlanAttemptKeyV3Fixture(t *testing.T) {
 	}
 }
 
+func TestPlanIdentityIncludesVideoSampleEntry(t *testing.T) {
+	plan := PlanV3{
+		PlanID:          "plan:sample-entry",
+		Delivery:        DeliveryRemuxHLSV3,
+		Stream:          StreamV3{Protocol: StreamHLSV3, Container: "hls"},
+		EffectiveRecipe: EffectiveRecipeV3{VideoCodec: "hevc"},
+	}
+	withoutEntryID := DeterministicPlanIDV3("attempt-sample-entry", 42, 42, plan)
+	withoutEntryKey := PlanAttemptKeyV3(plan, "output-1", nil)
+	plan.EffectiveRecipe.VideoSampleEntry = VideoSampleEntryHVC1
+	if withEntryID := DeterministicPlanIDV3("attempt-sample-entry", 42, 42, plan); withEntryID == withoutEntryID {
+		t.Fatal("sample-entry change did not alter the deterministic plan id")
+	}
+	if withEntryKey := PlanAttemptKeyV3(plan, "output-1", nil); withEntryKey == withoutEntryKey {
+		t.Fatal("sample-entry change did not alter the plan-attempt key")
+	}
+}
+
 func TestProtocolV3ConformanceMatrixCoversReleaseTrain(t *testing.T) {
 	var matrix ConformanceMatrixV3
 	body, err := os.ReadFile("testdata/protocol_v3/conformance_matrix.json")
@@ -984,6 +1002,105 @@ func TestPlanPlaybackV3SafariNativeHLSAvoidsProgressiveDVRemux(t *testing.T) {
 		result.TargetVideoCodec != "copy" || result.PlayMethod != PlayRemux ||
 		!result.Plan.Claims.Video.DolbyVision {
 		t.Fatalf("result = %s", ExplainPlannerResultV3(result))
+	}
+}
+
+func TestHLSVideoSampleEntryV3ScopesNativeRecipes(t *testing.T) {
+	tests := []struct {
+		name         string
+		platform     string
+		appBuild     string
+		deviceQuirks bool
+		nativeHLS    bool
+		dvProfile    int
+		dvStrip      bool
+		want         string
+	}{
+		{name: "legacy Android plain HEVC", platform: "android", appBuild: legacyAndroidMedia3HLSBuildV3, deviceQuirks: true, want: VideoSampleEntryHVC1},
+		{name: "legacy Android Profile 7 strip", platform: "android", appBuild: legacyAndroidMedia3HLSBuildV3, deviceQuirks: true, dvProfile: 7, dvStrip: true, want: VideoSampleEntryHVC1},
+		{name: "legacy Android Profile 8 preserve", platform: "android", appBuild: legacyAndroidMedia3HLSBuildV3, deviceQuirks: true, dvProfile: 8, want: VideoSampleEntryDVH1},
+		{name: "Android quirks without legacy build", platform: "android", deviceQuirks: true, dvProfile: 8, want: ""},
+		{name: "Android quirks on another build", platform: "android", appBuild: "16", deviceQuirks: true, dvProfile: 8, want: ""},
+		{name: "unscoped Android legacy build", platform: "android", appBuild: legacyAndroidMedia3HLSBuildV3, dvProfile: 8, want: ""},
+		{name: "web MediaSource", platform: "web", deviceQuirks: true, dvProfile: 7, dvStrip: true, want: ""},
+		{name: "explicit native HLS Profile 7 strip", platform: "tvos", nativeHLS: true, dvProfile: 7, dvStrip: true, want: VideoSampleEntryHVC1},
+		{name: "explicit native HLS Profile 8 preserve", platform: "tvos", nativeHLS: true, dvProfile: 8, want: VideoSampleEntryDVH1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := validStartRequestV3()
+			req.ClientPlaybackContext.Device.Platform = test.platform
+			req.ClientPlaybackContext.AppBuild = test.appBuild
+			if test.deviceQuirks {
+				req.ClientFeatures = append(req.ClientFeatures, FeatureDeviceQuirksV3)
+			}
+			if test.nativeHLS {
+				hls := req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3]
+				hls.Features = append(hls.Features, ClientNativeHLSPlaybackV3)
+				req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3] = hls
+			}
+			source := SourceDescriptorV3{VideoCodec: "hevc", DVProfile: test.dvProfile}
+			if got := hlsVideoSampleEntryV3(source, req, test.dvStrip); got != test.want {
+				t.Fatalf("sample entry = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestPlanPlaybackV3AndroidMedia3HLSRecipesAcrossSourceQualities(t *testing.T) {
+	profiles := []struct {
+		name           string
+		profile        int
+		compatibility  int
+		videoRangeType string
+		hdr            *HDRCapabilitiesV3
+		wantEntry      string
+	}{
+		{name: "Profile 7 strip", profile: 7, compatibility: 6, videoRangeType: "DOVIWithEL", hdr: &HDRCapabilitiesV3{HDR10: true}, wantEntry: VideoSampleEntryHVC1},
+		{name: "Profile 8 preserve", profile: 8, compatibility: 1, videoRangeType: "DOVIWithHDR10", hdr: &HDRCapabilitiesV3{DolbyVisionProfiles: []int{8}, DolbyVisionProfileLevels: []DolbyVisionProfileCapabilityV3{{Profile: 8, MaxLevel: 6, BLCompatibilityIDs: []int{1}}}}, wantEntry: VideoSampleEntryDVH1},
+	}
+	for _, profile := range profiles {
+		for _, quality := range []string{"auto", QualityOriginalV3, "2160p"} {
+			t.Run(profile.name+"/"+quality, func(t *testing.T) {
+				file := detailedFixtureFileV3()
+				file.CodecAudio = "truehd"
+				file.AudioChannels = 8
+				file.AudioTracks[0] = models.AudioTrack{Codec: "truehd", Channels: 8, Layout: "7.1", Default: true}
+				file.VideoTracks[0].DVProfile = profile.profile
+				file.VideoTracks[0].DVBLCompatID = profile.compatibility
+				file.VideoTracks[0].DVLevel = 6
+				file.VideoTracks[0].ColorTransfer = "smpte2084"
+				file.VideoTracks[0].VideoRange = "DolbyVision"
+				file.VideoTracks[0].VideoRangeType = profile.videoRangeType
+
+				req := validStartRequestV3()
+				req.QualityPreference = quality
+				req.ClientPlaybackContext.Device.Platform = "android"
+				req.ClientPlaybackContext.AppBuild = legacyAndroidMedia3HLSBuildV3
+				req.ClientFeatures = append(req.ClientFeatures, FeatureDeviceQuirksV3)
+				req.Capabilities.VideoDecode = []VideoDecodeCapabilityV3{{Codec: "hevc", Profiles: []string{"main 10"}, Levels: []int{153}, BitDepths: []int{10}, MaxWidth: 3840, MaxHeight: 2160, MaxFrameRate: 60, MaxBitrateKbps: 80_000, Hardware: true}}
+				req.Capabilities.HDRDetails = profile.hdr
+				req.ClientPlaybackContext.Output.HDRDetails = profile.hdr
+				delete(req.ClientPlaybackContext.Deliveries, DeliveryClassOriginalHTTPV3)
+				delete(req.ClientPlaybackContext.Deliveries, DeliveryClassProgressiveV3)
+				hls := req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3]
+				hls.VideoCodecs = []string{"hevc"}
+				hls.AudioDecodeCodecs = []string{"aac"}
+				hls.HDRDetails = profile.hdr
+				req.ClientPlaybackContext.Deliveries[DeliveryClassHLSV3] = hls
+
+				result := PlanPlaybackV3(PlannerInputV3{
+					Request: req, RequestedFile: file, EffectiveFile: file, AudioTrackIndex: 0,
+					Settings: PlannerSettingsV3{TranscodeEnabled: true, Allow4KTranscode: true}, Registry: testTransformationRegistryV3(),
+				})
+				if result.Plan == nil || result.Plan.Delivery != DeliveryRemuxHLSV3 || result.TargetVideoCodec != "copy" || !result.TranscodeAudio {
+					t.Fatalf("result = %s", ExplainPlannerResultV3(result))
+				}
+				if got := result.Plan.EffectiveRecipe.VideoSampleEntry; got != profile.wantEntry {
+					t.Fatalf("sample entry = %q, want %q", got, profile.wantEntry)
+				}
+			})
+		}
 	}
 }
 
@@ -3331,6 +3448,10 @@ func TestPlanPlaybackV3VideoRemuxPreservesHLSOnlyAudioCodec(t *testing.T) {
 	file.AudioTracks[0] = models.AudioTrack{Codec: "eac3", Channels: 6, Layout: "5.1"}
 
 	req := validStartRequestV3()
+	// This test pins upstream's remux routing; the fork's Android HEVC/AC3
+	// direct-play guard would force a different route on the fixture's
+	// default Android platform.
+	req.ClientPlaybackContext.Device.Platform = "web"
 	req.Capabilities.VideoEvidence = EvidenceDeclaredV3
 	req.Capabilities.AudioEvidence = EvidenceDeclaredV3
 	req.Capabilities.CodecsAudio = []string{"aac", "eac3"}
@@ -3363,6 +3484,10 @@ func TestPlanPlaybackV3VideoRemuxAdaptsProgressiveWhenHLSVideoUnsupported(t *tes
 	file.AudioTracks[0] = models.AudioTrack{Codec: "eac3", Channels: 6, Layout: "5.1"}
 
 	req := validStartRequestV3()
+	// This test pins upstream's remux routing; the fork's Android HEVC/AC3
+	// direct-play guard would force a different route on the fixture's
+	// default Android platform.
+	req.ClientPlaybackContext.Device.Platform = "web"
 	req.Capabilities.VideoEvidence = EvidenceDeclaredV3
 	req.Capabilities.AudioEvidence = EvidenceDeclaredV3
 	req.Capabilities.CodecsAudio = []string{"aac", "eac3"}
@@ -3514,6 +3639,10 @@ func TestPlanPlaybackV3VideoRemuxHonorsProgressiveAudioPassthrough(t *testing.T)
 	file.AudioTracks[0] = models.AudioTrack{Codec: "ac3", Channels: 6, Layout: "5.1"}
 
 	req := validStartRequestV3()
+	// This test pins upstream's remux routing; the fork's Android HEVC/AC3
+	// direct-play guard would force a different route on the fixture's
+	// default Android platform.
+	req.ClientPlaybackContext.Device.Platform = "web"
 	req.Capabilities.VideoEvidence = EvidenceDeclaredV3
 	req.ClientFeatures = append(req.ClientFeatures, FeatureLayoutPassthrough)
 	req.Capabilities.CodecsAudio = []string{"aac"}
